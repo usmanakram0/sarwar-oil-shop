@@ -1,10 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 
 import { useForm } from "react-hook-form";
 
 import { zodResolver } from "@hookform/resolvers/zod";
 
-import { Download, Upload, HardDrive, Cloud, Printer } from "lucide-react";
+import { Download, Upload, HardDrive, Cloud } from "lucide-react";
 
 import { useSync } from "@/contexts/SyncContext";
 
@@ -34,7 +34,6 @@ import { SHOP_NAME } from "@/lib/shop";
 import { toast } from "sonner";
 
 import { Progress } from "@/components/ui/progress";
-import { isPrintBridgeAvailable } from "@/lib/printing/printService";
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<ShopSettings>(settingsStorage.get());
@@ -48,9 +47,6 @@ export default function SettingsPage() {
   const { syncNow, lastSyncedAt, pendingChanges, isOnline, status } = useSync();
 
   const [syncing, setSyncing] = useState(false);
-  const [printBridgeOnline, setPrintBridgeOnline] = useState<boolean | null>(
-    null,
-  );
 
   const updateSettings = useSettingsMutation();
 
@@ -124,23 +120,6 @@ export default function SettingsPage() {
 
   const backupDue = backupStorage.isBackupDue();
 
-  useEffect(() => {
-    let active = true;
-
-    const checkBridge = async () => {
-      const online = await isPrintBridgeAvailable();
-      if (active) setPrintBridgeOnline(online);
-    };
-
-    checkBridge();
-    const intervalId = window.setInterval(checkBridge, 5000);
-
-    return () => {
-      active = false;
-      window.clearInterval(intervalId);
-    };
-  }, []);
-
   return (
     <div className="space-y-6 pb-16 lg:pb-0 animate-fade-in max-w-2xl">
       <h1 className="text-2xl font-heading font-bold">Settings</h1>
@@ -182,20 +161,6 @@ export default function SettingsPage() {
               <Label>Invoice "Thanks" Message</Label>
 
               <Input {...form.register("thankYouMessage")} />
-            </div>
-
-            <div>
-              <Label>Receipt Printer Name</Label>
-
-              <Input
-                {...form.register("printerName")}
-                placeholder="e.g. AnyDesk Printer"
-              />
-
-              <p className="text-xs text-muted-foreground mt-1">
-                Use the exact printer name from Windows. Leave empty to use the
-                default printer.
-              </p>
             </div>
 
             <Button type="submit">Save Settings</Button>

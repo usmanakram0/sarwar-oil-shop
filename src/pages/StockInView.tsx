@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Printer, Wallet, Truck } from 'lucide-react';
+import { ArrowLeft, Printer, Wallet, Truck, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -12,6 +12,8 @@ import { CURRENCY, formatMoney } from '@/lib/currency';
 import { useSettingsQuery, useStockPurchaseQuery, useSupplierQuery } from '@/hooks/useShopData';
 import { useStockPurchaseMutations } from '@/hooks/useShopMutations';
 import { safeString } from '@/lib/query/safe';
+import { buildStockPurchaseReceiptHtml } from '@/lib/printing/stockPurchaseReceipts';
+import { printReceiptHtml } from '@/lib/printing/printService';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 
@@ -24,6 +26,7 @@ export default function StockInView() {
   const { recordPayment } = useStockPurchaseMutations();
   const [payDialogOpen, setPayDialogOpen] = useState(false);
   const [payAmount, setPayAmount] = useState<number | ''>('');
+  const [isPrinting, setIsPrinting] = useState(false);
 
   if (!purchase) {
     return (
@@ -37,89 +40,27 @@ export default function StockInView() {
   const cur = CURRENCY;
   const remaining = purchase.remainingAmount ?? (purchase.total - (purchase.paidAmount || 0));
 
-  const handlePrint = () => {
-    const shopName = SHOP_NAME;
-    const shopAddress = safeString(settings?.shopAddress);
-    const shopPhone = safeString(settings?.shopPhone);
-    const nowStr = new Date().toLocaleDateString('en-GB', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' })
-      + ' ' + new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: true });
+  const handlePrint = async () => {
+    if (isPrinting) return;
 
-    const vehicleLines = [
-      purchase.vehicleNumber ? `<p><strong>Vehicle No:</strong> ${purchase.vehicleNumber}</p>` : '',
-      purchase.vehicleDriver ? `<p><strong>Driver:</strong> ${purchase.vehicleDriver}</p>` : '',
-      purchase.vehicleType ? `<p><strong>Type:</strong> ${purchase.vehicleType}</p>` : '',
-    ].join('');
+    setIsPrinting(true);
 
-    const styles = `
-      <style>
-        @page { margin: 0; }
-        body { font-family: Arial, sans-serif; margin: 0; padding: 0; text-align: center; }
-        .receipt-container { max-width: 290px; width: 100%; margin: 10px auto; padding: 20px 40px; border: 1px dashed #000; line-height: 1.5; }
-        .header h2 { margin: 0; font-size: 22px; font-weight: 900; }
-        .header p, .footer p { margin: 0; font-size: 12px; }
-        .info p { font-size: 11px; margin: 2px 0; display: flex; justify-content: space-between; }
-        .products-table table { width: 100%; border-collapse: collapse; margin: 4px 0; }
-        .products-table th, .products-table td { padding: 3px; text-align: left; border: 1px solid #000; font-size: 11px; }
-        .totals p { font-size: 11px; margin: 2px 0; display: flex; justify-content: space-between; }
-        hr { border: none; border-top: 1px dashed #000; margin: 5px 0; }
-        strong { font-size: 11px; }
-      </style>
-    `;
+    try {
+      const html = buildStockPurchaseReceiptHtml({
+        shopName: SHOP_NAME,
+        shopAddress: safeString(settings?.shopAddress),
+        shopPhone: safeString(settings?.shopPhone),
+        purchase,
+        supplierPhone: supplier?.phone,
+      });
 
-    const content = `
-      <div class="receipt-container">
-        <div class="header">
-          <h2>${shopName}</h2>
-          ${shopAddress ? `<p style="max-width:70%;margin:auto;line-height:14px">${shopAddress}</p>` : ''}
-          ${shopPhone ? `<p style="margin-top:4px">Tel: ${shopPhone}</p>` : ''}
-          <div style="width:100%;display:flex;justify-content:space-between;align-items:center;margin-top:6px">
-            <p><strong>Purchase Slip</strong></p>
-            <p><strong>Date:</strong> ${nowStr}</p>
-          </div>
-        </div>
-        <hr />
-        <div class="info">
-          <p style="text-transform:uppercase"><strong>Slip No:</strong> ${purchase.slipNumber}</p>
-          <p><strong>Supplier:</strong> ${purchase.supplierName}</p>
-          ${supplier?.phone ? `<p><strong>Phone:</strong> ${supplier.phone}</p>` : ''}
-          ${vehicleLines}
-        </div>
-        <div class="products-table">
-          <table>
-            <thead>
-              <tr><th>Item</th><th>Category</th><th>Qty</th><th>Rate</th><th>Total</th></tr>
-            </thead>
-            <tbody>
-              ${purchase.items.map(item => `
-                <tr>
-                  <td>${item.productName}</td>
-                  <td>${item.category}</td>
-                  <td>${item.quantity.toLocaleString()} L</td>
-                  <td>${formatMoney(item.pricePerLiter, 0)}</td>
-                  <td>${formatMoney(item.total, 0)}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
-        <div class="totals">
-          <p><strong>Total:</strong> ${formatMoney(purchase.total, 0)}</p>
-          <p><strong>Paid:</strong> ${formatMoney(purchase.paidAmount || 0, 0)}</p>
-          <p><strong>Pending:</strong> ${formatMoney(remaining, 0)}</p>
-        </div>
-        ${purchase.note ? `<p style="font-size:11px;margin-top:6px"><strong>Note:</strong> ${purchase.note}</p>` : ''}
-        <hr />
-        <div class="footer"><p>Received oil into store inventory. Supplier copy.</p></div>
-      </div>
-    `;
-
-    const win = window.open('', '_blank');
-    if (!win) return;
-    win.document.open();
-    win.document.write(styles + content);
-    win.document.close();
-    win.print();
-    win.close();
+      await printReceiptHtml(html);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Print failed';
+      toast.error(message);
+    } finally {
+      setIsPrinting(false);
+    }
   };
 
   const handlePayment = () => {
@@ -159,8 +100,9 @@ export default function StockInView() {
               <Wallet className="w-4 h-4 mr-1" />Pay Supplier
             </Button>
           )}
-          <Button size="sm" onClick={handlePrint}>
-            <Printer className="w-4 h-4 mr-1" />Print Slip
+          <Button size="sm" disabled={isPrinting} onClick={handlePrint}>
+            {isPrinting ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Printer className="w-4 h-4 mr-1" />}
+            Print Slip
           </Button>
         </div>
       </div>

@@ -210,9 +210,10 @@ export default function AppLayout() {
 
 
 
-        <SyncStatusBanner />
-
-        <WeeklyBackupReminder />
+        <div className="no-print">
+          <SyncStatusBanner />
+          <WeeklyBackupReminder />
+        </div>
 
 
 

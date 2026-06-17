@@ -14,6 +14,7 @@ import {
   isInvoiceClosed,
   type InvoiceCloseOptions,
 } from '@/lib/invoiceLifecycle';
+import { isWalkingCustomer } from '@/lib/walkingCustomer';
 
 export interface Product {
   id: string;
@@ -443,29 +444,31 @@ export const invoiceStorage = {
         productStorage.updateStock(item.productId, -item.quantity);
       }
     }
-    paymentStorage.add({
-      customerId: invoice.customerId,
-      customerName: invoice.customerName,
-      invoiceId: newInvoice.id,
-      invoiceNumber: newInvoice.invoiceNumber,
-      amount: invoice.total,
-      type: 'debit',
-      note: isHistorical
-        ? `Historical order ${newInvoice.invoiceNumber}`
-        : `Invoice ${newInvoice.invoiceNumber}`,
-    }, timestamp);
-    if (invoice.paidAmount > 0) {
+    if (!isWalkingCustomer(invoice.customerId)) {
       paymentStorage.add({
         customerId: invoice.customerId,
         customerName: invoice.customerName,
         invoiceId: newInvoice.id,
         invoiceNumber: newInvoice.invoiceNumber,
-        amount: invoice.paidAmount,
-        type: 'credit',
+        amount: invoice.total,
+        type: 'debit',
         note: isHistorical
-          ? `Historical payment for ${newInvoice.invoiceNumber}`
-          : `Payment for ${newInvoice.invoiceNumber}`,
+          ? `Historical order ${newInvoice.invoiceNumber}`
+          : `Invoice ${newInvoice.invoiceNumber}`,
       }, timestamp);
+      if (invoice.paidAmount > 0) {
+        paymentStorage.add({
+          customerId: invoice.customerId,
+          customerName: invoice.customerName,
+          invoiceId: newInvoice.id,
+          invoiceNumber: newInvoice.invoiceNumber,
+          amount: invoice.paidAmount,
+          type: 'credit',
+          note: isHistorical
+            ? `Historical payment for ${newInvoice.invoiceNumber}`
+            : `Payment for ${newInvoice.invoiceNumber}`,
+        }, timestamp);
+      }
     }
     return newInvoice;
   },
@@ -536,16 +539,17 @@ export const invoiceStorage = {
     inv.updatedAt = new Date().toISOString();
     invoices[idx] = inv;
     setAll('invoices', invoices);
-    // Record credit payment
-    paymentStorage.add({
-      customerId: inv.customerId,
-      customerName: inv.customerName,
-      invoiceId: inv.id,
-      invoiceNumber: inv.invoiceNumber,
-      amount,
-      type: 'credit',
-      note: `Payment for ${inv.invoiceNumber}`,
-    });
+    if (!isWalkingCustomer(inv.customerId)) {
+      paymentStorage.add({
+        customerId: inv.customerId,
+        customerName: inv.customerName,
+        invoiceId: inv.id,
+        invoiceNumber: inv.invoiceNumber,
+        amount,
+        type: 'credit',
+        note: `Payment for ${inv.invoiceNumber}`,
+      });
+    }
     return inv;
   },
 };

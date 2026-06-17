@@ -1,7 +1,12 @@
 import { format } from 'date-fns';
 import { formatMoney } from '@/lib/currency';
 import { getInvoiceDiscountAmount, type Invoice } from '@/lib/storage';
-import { buildReceiptDocument } from '@/lib/printing/thermalStyles';
+import { getInvoiceCustomerName } from '@/lib/walkingCustomer';
+import {
+  buildMetaTableRows,
+  buildReceiptDocument,
+  buildTotalsTableRows,
+} from '@/lib/printing/thermalStyles';
 
 export interface InvoiceReceiptContext {
   shopName: string;
@@ -30,33 +35,62 @@ function formatNow(): string {
   );
 }
 
+function buildReceiptHeader(
+  shopName: string,
+  shopAddress: string,
+  shopPhone: string,
+  title: string,
+  dateLabel: string
+): string {
+  return `
+    <div class="header">
+      <h2>${shopName}</h2>
+      ${shopAddress ? `<p class="header-address">${shopAddress}</p>` : ''}
+      ${shopPhone ? `<p>Tel: ${shopPhone}</p>` : ''}
+      <table class="title-row">
+        <tr>
+          <td>${title}</td>
+          <td>${dateLabel}: ${formatNow()}</td>
+        </tr>
+      </table>
+    </div>
+  `;
+}
+
 export function buildBillReceiptBody(context: InvoiceReceiptContext): string {
   const { shopName, shopAddress, shopPhone, thankYouMessage, invoice, customerPhone, customerAddress } =
     context;
-  const nowStr = formatNow();
   const discountAmount = getInvoiceDiscountAmount(invoice);
   const remaining = invoice.remainingAmount ?? invoice.total - (invoice.paidAmount || 0);
+  const customerName = getInvoiceCustomerName(invoice);
+
+  const metaRows = buildMetaTableRows([
+    { label: 'Voucher No:', value: invoice.invoiceNumber, uppercase: true },
+    {
+      label: 'Order Date:',
+      value: format(new Date(invoice.createdAt), 'EEE dd MMM yyyy hh:mm a'),
+    },
+    { label: 'Name:', value: customerName },
+    ...(customerPhone ? [{ label: 'Phone:', value: customerPhone }] : []),
+    ...(customerAddress ? [{ label: 'Address:', value: customerAddress }] : []),
+  ]);
+
+  const totalRows = buildTotalsTableRows([
+    { label: 'Sub Total:', value: formatMoney(invoice.subtotal, 0) },
+    ...(discountAmount > 0
+      ? [{ label: 'Discount:', value: `-${formatMoney(discountAmount, 0)}` }]
+      : []),
+    { label: 'Total:', value: formatMoney(invoice.total, 0) },
+    { label: 'Received:', value: formatMoney(invoice.paidAmount || 0, 0) },
+    { label: 'Pending:', value: formatMoney(remaining, 0) },
+  ]);
 
   return `
     <div class="receipt-container">
-      <div class="header">
-        <h2>${shopName}</h2>
-        ${shopAddress ? `<p style="max-width:70%;margin:auto;line-height:14px">${shopAddress}</p>` : ''}
-        ${shopPhone ? `<p style="margin-top:4px">Tel: ${shopPhone}</p>` : ''}
-        <div style="width:100%;display:flex;justify-content:space-between;align-items:center;margin-top:6px">
-          <p><strong>Invoice</strong></p>
-          <p><strong>Date:</strong> ${nowStr}</p>
-        </div>
-      </div>
+      ${buildReceiptHeader(shopName, shopAddress, shopPhone, 'Invoice', 'Date')}
       <hr />
-      <div class="info">
-        <p style="text-transform:uppercase"><strong>Voucher No:</strong> ${invoice.invoiceNumber}</p>
-        <p><strong>Order Date:</strong> ${format(new Date(invoice.createdAt), 'EEE dd MMM yyyy hh:mm a')}</p>
-        <p><strong>Name:</strong> ${invoice.customerName || 'Walking Customer'}</p>
-        ${customerPhone ? `<p><strong>Phone:</strong> ${customerPhone}</p>` : ''}
-        ${customerAddress ? `<p><strong>Address:</strong> ${customerAddress}</p>` : ''}
-      </div>
-      <div class="products-table">
+      <table class="meta-table">${metaRows}</table>
+      <div class="products-table cols-4">
         <table>
           <thead>
             <tr><th>Item</th><th>Qty</th><th>Rate</th><th>Total</th></tr>
@@ -76,13 +110,7 @@ export function buildBillReceiptBody(context: InvoiceReceiptContext): string {
           </tbody>
         </table>
       </div>
-      <div class="totals">
-        <p><strong>Sub Total:</strong> ${formatMoney(invoice.subtotal, 0)}</p>
-        ${discountAmount > 0 ? `<p><strong>Discount:</strong> -${formatMoney(discountAmount, 0)}</p>` : ''}
-        <p><strong>Total:</strong> ${formatMoney(invoice.total, 0)}</p>
-        <p><strong>Received:</strong> ${formatMoney(invoice.paidAmount || 0, 0)}</p>
-        <p><strong>Pending:</strong> ${formatMoney(remaining, 0)}</p>
-      </div>
+      <table class="totals-table">${totalRows}</table>
       <hr />
       <div class="footer"><p>${thankYouMessage || 'Thank You for Your Business!'}</p></div>
     </div>
@@ -90,23 +118,32 @@ export function buildBillReceiptBody(context: InvoiceReceiptContext): string {
 }
 
 export function buildGatePassReceiptBody(context: InvoiceReceiptContext): string {
-  const { shopName, invoice, customerPhone } = context;
-  const nowStr = formatNow();
+  const { shopName, shopAddress, shopPhone, invoice, customerPhone } = context;
+  const customerName = getInvoiceCustomerName(invoice);
+
+  const metaRows = buildMetaTableRows([
+    { label: 'Voucher No:', value: invoice.invoiceNumber, uppercase: true },
+    { label: 'Name:', value: customerName },
+    ...(customerPhone ? [{ label: 'Phone:', value: customerPhone }] : []),
+  ]);
 
   return `
     <div class="receipt-container">
       <div class="header">
         <h2>${shopName}</h2>
-        <p><strong>Date:</strong> ${nowStr}</p>
+        ${shopAddress ? `<p class="header-address">${shopAddress}</p>` : ''}
+        ${shopPhone ? `<p>Tel: ${shopPhone}</p>` : ''}
+        <p class="section-title">Gate Pass</p>
+        <table class="title-row">
+          <tr>
+            <td></td>
+            <td>Date: ${formatNow()}</td>
+          </tr>
+        </table>
       </div>
-      <p style="margin:0"><strong style="font-size:18px">Gate Pass</strong></p>
       <hr />
-      <div class="info">
-        <p style="text-transform:uppercase"><strong>Voucher No:</strong> ${invoice.invoiceNumber}</p>
-        <p><strong>Name:</strong> ${invoice.customerName || 'Walking Customer'}</p>
-        ${customerPhone ? `<p><strong>Phone:</strong> ${customerPhone}</p>` : ''}
-      </div>
-      <div class="products-table">
+      <table class="meta-table">${metaRows}</table>
+      <div class="products-table cols-2">
         <table>
           <thead>
             <tr><th>Item</th><th>Quantity</th></tr>

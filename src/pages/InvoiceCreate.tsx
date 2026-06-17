@@ -8,8 +8,10 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import HistoricalEntryFields from '@/components/forms/HistoricalEntryFields';
+import CustomerSearchCombobox from '@/components/forms/CustomerSearchCombobox';
 import { type InvoiceItem } from '@/lib/storage';
 import { CURRENCY, formatMoney } from '@/lib/currency';
+import { WALKING_CUSTOMER_NAME } from '@/lib/walkingCustomer';
 import {
   useCustomerBalanceQuery,
   useCustomersList,
@@ -102,7 +104,6 @@ export default function InvoiceCreate() {
   const removeItem = (index: number) => setItems(items.filter((_, i) => i !== index));
 
   const handleSubmit = () => {
-    if (!customerId) { toast.error('Please select a customer'); return; }
     if (items.length === 0) { toast.error('Please add at least one product'); return; }
     const invalidItems = items.filter(i => !i.productId || i.quantity <= 0);
     if (invalidItems.length > 0) { toast.error('Please fill in all product details'); return; }
@@ -131,7 +132,7 @@ export default function InvoiceCreate() {
     }
 
     const paid = Number(paidAmount) || 0;
-    const customer = customers.find(c => c.id === customerId);
+    const customer = customerId ? customers.find(c => c.id === customerId) : null;
 
     let status: 'paid' | 'pending' | 'partial' = 'pending';
     if (paid >= total) status = 'paid';
@@ -140,8 +141,8 @@ export default function InvoiceCreate() {
     createInvoice.mutate(
       {
         invoice: {
-          customerId,
-          customerName: customer?.name || '',
+          customerId: customerId || '',
+          customerName: customer?.name || WALKING_CUSTOMER_NAME,
           items,
           subtotal,
           discount,
@@ -191,7 +192,7 @@ export default function InvoiceCreate() {
         onManualNumberChange={setManualInvoiceNumber}
         manualNumberLabel="Old invoice / voucher number"
         manualNumberPlaceholder="e.g. INV-2022-0156"
-        description="Enter old written orders from your register. Stock will not be reduced and the ledger will use the date you choose."
+        description="Enter old written orders from your register. Stock will not be reduced. Ledger entries are created only when a registered customer is selected."
       />
 
       {/* Customer Selection */}
@@ -200,12 +201,16 @@ export default function InvoiceCreate() {
           <CardTitle className="text-sm font-heading">Customer</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          <Select value={customerId} onValueChange={setCustomerId}>
-            <SelectTrigger><SelectValue placeholder="Select customer" /></SelectTrigger>
-            <SelectContent>
-              {customers.map(c => <SelectItem key={c.id} value={c.id}>{c.name} {c.phone ? `(${c.phone})` : ''}</SelectItem>)}
-            </SelectContent>
-          </Select>
+          <CustomerSearchCombobox
+            customers={customers}
+            value={customerId}
+            onValueChange={setCustomerId}
+          />
+          {!customerId && (
+            <p className="text-xs text-muted-foreground">
+              Leave as Walking Customer for walk-in sales. No ledger entry will be created.
+            </p>
+          )}
           {customerId && (() => {
             const sel = customers.find(c => c.id === customerId);
             return sel ? (

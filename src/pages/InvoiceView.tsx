@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { SHOP_NAME } from '@/lib/shop';
 import { CURRENCY, formatMoney } from '@/lib/currency';
 import { getInvoiceDiscountAmount } from '@/lib/storage';
+import { getInvoiceCustomerName } from '@/lib/walkingCustomer';
 import { buildInvoiceReceiptHtml } from '@/lib/printing/invoiceReceipts';
 import { printReceiptBatch } from '@/lib/printing/printService';
 import { useCustomerQuery, useInvoiceQuery, useSettingsQuery } from '@/hooks/useShopData';
@@ -49,18 +50,8 @@ export default function InvoiceView() {
         customerAddress: customer?.address,
       });
 
-      const mode = await printReceiptBatch(receipts, {
-        printerName: settings?.printerName || undefined,
-      });
-
-      if (mode === 'silent') {
-        toast.success(type === 'both' ? 'Bill and gate pass sent to printer' : 'Sent to printer');
-        return;
-      }
-
-      toast.message('Print bridge is not running', {
-        description: 'Start it with npm run print-bridge for instant printing without the browser dialog.',
-      });
+      await printReceiptBatch(receipts);
+      toast.success(type === 'both' ? 'Bill and gate pass ready to print' : 'Receipt ready to print');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Print failed';
       toast.error(message);
@@ -79,7 +70,7 @@ export default function InvoiceView() {
   }
 
   const cur = CURRENCY;
-  const customerName = invoice.customerName || customer?.name || 'Walking Customer';
+  const customerName = getInvoiceCustomerName(invoice);
   const remaining = invoice.remainingAmount ?? (invoice.total - (invoice.paidAmount || 0));
   const isClosed = isInvoiceClosed(invoice);
 
@@ -161,7 +152,7 @@ export default function InvoiceView() {
       </div>
 
       {isClosed && (
-        <div className="mb-4 p-3 rounded-lg bg-muted/50 border text-sm space-y-1">
+        <div className="mb-4 p-3 rounded-lg bg-muted/50 border text-sm space-y-1 no-print">
           <p className="font-medium">
             {invoice.status === 'returned' ? 'This order was returned by the customer.' : 'This invoice was voided.'}
           </p>

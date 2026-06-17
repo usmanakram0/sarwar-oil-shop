@@ -1,0 +1,8 @@
+# Supabase CLI config — link with the account that owns project jmeosuqxmahxpepkvyej
+# Run: supabase login
+# Then: supabase link --project-ref jmeosuqxmahxpepkvyej
+
+project_id = "jmeosuqxmahxpepkvyej"
+
+[db]
+major_version = 17

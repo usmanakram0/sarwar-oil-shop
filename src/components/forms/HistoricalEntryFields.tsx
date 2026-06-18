@@ -2,6 +2,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { FormLabel } from '@/components/ui/FormLabel';
 import { formatDateInputValue } from '@/lib/historicalEntry';
 import { History } from 'lucide-react';
 
@@ -51,7 +52,7 @@ export default function HistoricalEntryFields({
         {enabled && (
           <div className="grid sm:grid-cols-2 gap-4 pl-7">
             <div>
-              <Label htmlFor="historical-order-date">Order date</Label>
+              <FormLabel htmlFor="historical-order-date" required>Order date</FormLabel>
               <Input
                 id="historical-order-date"
                 type="date"
@@ -62,7 +63,7 @@ export default function HistoricalEntryFields({
             </div>
             {showManualNumber && onManualNumberChange && (
               <div>
-                <Label htmlFor="historical-manual-number">{manualNumberLabel}</Label>
+                <FormLabel htmlFor="historical-manual-number">{manualNumberLabel}</FormLabel>
                 <Input
                   id="historical-manual-number"
                   placeholder={manualNumberPlaceholder}

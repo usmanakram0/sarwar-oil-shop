@@ -1,6 +1,7 @@
 import { format } from 'date-fns';
 import { formatMoney } from '@/lib/currency';
 import { getInvoiceDiscountAmount, type Invoice } from '@/lib/storage';
+import { formatLineItemQuantityWithUnit } from '@/lib/productTypes';
 import { getInvoiceCustomerName } from '@/lib/walkingCustomer';
 import {
   buildMetaTableRows,
@@ -101,7 +102,7 @@ export function buildBillReceiptBody(context: InvoiceReceiptContext): string {
                 (item) => `
               <tr>
                 <td>${item.productName}</td>
-                <td>${item.quantity.toLocaleString()} Ltr</td>
+                <td>${formatLineItemQuantityWithUnit(item)}</td>
                 <td>${formatMoney(item.appliedPrice || item.pricePerLiter, 0)}</td>
                 <td>${formatMoney(item.total, 0)}</td>
               </tr>`
@@ -154,7 +155,7 @@ export function buildGatePassReceiptBody(context: InvoiceReceiptContext): string
                 (item) => `
               <tr>
                 <td>${item.productName}</td>
-                <td>${item.quantity.toLocaleString()} Ltr</td>
+                <td>${formatLineItemQuantityWithUnit(item)}</td>
               </tr>`
               )
               .join('')}

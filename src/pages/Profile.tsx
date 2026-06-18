@@ -4,7 +4,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { FormLabel } from '@/components/ui/FormLabel';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { useAuth } from '@/contexts/AuthContext';
 import { profileSchema, type ProfileFormData } from '@/lib/validation';
@@ -71,20 +71,20 @@ export default function Profile() {
         <CardContent>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             <div>
-              <Label>Email</Label>
+              <FormLabel>Email</FormLabel>
               <Input value={session.email} disabled className="bg-muted" />
               <p className="text-xs text-muted-foreground mt-1">Email cannot be changed</p>
             </div>
             <div className="grid sm:grid-cols-2 gap-4">
               <div>
-                <Label>First name *</Label>
+                <FormLabel required>First name</FormLabel>
                 <Input {...form.register('firstName')} />
                 {form.formState.errors.firstName && (
                   <p className="text-xs text-destructive mt-1">{form.formState.errors.firstName.message}</p>
                 )}
               </div>
               <div>
-                <Label>Last name *</Label>
+                <FormLabel required>Last name</FormLabel>
                 <Input {...form.register('lastName')} />
                 {form.formState.errors.lastName && (
                   <p className="text-xs text-destructive mt-1">{form.formState.errors.lastName.message}</p>
@@ -92,7 +92,7 @@ export default function Profile() {
               </div>
             </div>
             <div>
-              <Label>Phone</Label>
+              <FormLabel>Phone</FormLabel>
               <Input {...form.register('phone')} />
             </div>
             <Button type="submit">Save changes</Button>

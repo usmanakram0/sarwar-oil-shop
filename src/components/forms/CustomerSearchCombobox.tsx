@@ -1,6 +1,6 @@
-import { useState } from 'react';
-import { Check, ChevronsUpDown } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { useState } from "react";
+import { Check, ChevronsUpDown } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import {
   Command,
   CommandEmpty,
@@ -8,11 +8,15 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
-} from '@/components/ui/command';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { cn } from '@/lib/utils';
-import type { Customer } from '@/lib/storage';
-import { WALKING_CUSTOMER_NAME } from '@/lib/walkingCustomer';
+} from "@/components/ui/command";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { cn } from "@/lib/utils";
+import type { Customer } from "@/lib/storage";
+import { WALKING_CUSTOMER_NAME } from "@/lib/walkingCustomer";
 
 interface CustomerSearchComboboxProps {
   customers: Customer[];
@@ -27,7 +31,9 @@ export default function CustomerSearchCombobox({
 }: CustomerSearchComboboxProps) {
   const [open, setOpen] = useState(false);
   const selectedCustomer = customers.find((customer) => customer.id === value);
-  const displayLabel = selectedCustomer ? selectedCustomer.name : WALKING_CUSTOMER_NAME;
+  const displayLabel = selectedCustomer
+    ? selectedCustomer.name
+    : WALKING_CUSTOMER_NAME;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -36,13 +42,16 @@ export default function CustomerSearchCombobox({
           variant="outline"
           role="combobox"
           aria-expanded={open}
-          className="w-full justify-between font-normal"
-        >
-          <span className={selectedCustomer ? '' : 'text-muted-foreground'}>{displayLabel}</span>
+          className="w-full justify-between font-normal hover:bg-transparent hover:text-primary">
+          <span className={selectedCustomer ? "" : "text-muted-foreground"}>
+            {displayLabel}
+          </span>
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+      <PopoverContent
+        className="w-[--radix-popover-trigger-width] p-0"
+        align="start">
         <Command>
           <CommandInput placeholder="Search by name or phone..." />
           <CommandList>
@@ -51,12 +60,14 @@ export default function CustomerSearchCombobox({
               <CommandItem
                 value={WALKING_CUSTOMER_NAME}
                 onSelect={() => {
-                  onValueChange('');
+                  onValueChange("");
                   setOpen(false);
-                }}
-              >
+                }}>
                 <Check
-                  className={cn('mr-2 h-4 w-4', value === '' ? 'opacity-100' : 'opacity-0')}
+                  className={cn(
+                    "mr-2 h-4 w-4",
+                    value === "" ? "opacity-100" : "opacity-0",
+                  )}
                 />
                 {WALKING_CUSTOMER_NAME}
               </CommandItem>
@@ -67,16 +78,15 @@ export default function CustomerSearchCombobox({
                   onSelect={() => {
                     onValueChange(customer.id);
                     setOpen(false);
-                  }}
-                >
+                  }}>
                   <Check
                     className={cn(
-                      'mr-2 h-4 w-4',
-                      value === customer.id ? 'opacity-100' : 'opacity-0'
+                      "mr-2 h-4 w-4",
+                      value === customer.id ? "opacity-100" : "opacity-0",
                     )}
                   />
                   {customer.name}
-                  {customer.phone ? ` (${customer.phone})` : ''}
+                  {customer.phone ? ` (${customer.phone})` : ""}
                 </CommandItem>
               ))}
             </CommandGroup>

@@ -15,13 +15,22 @@ import {
   type InvoiceCloseOptions,
 } from '@/lib/invoiceLifecycle';
 import { isWalkingCustomer } from '@/lib/walkingCustomer';
+import {
+  type CartonSize,
+  type ProductType,
+  normalizeProductType,
+} from '@/lib/productTypes';
+
+export type { ProductType, CartonSize };
 
 export interface Product {
   id: string;
   name: string;
+  productType?: ProductType;
+  cartonSize?: CartonSize;
   pricePerLiter: number;
   stock: number;
-  category: string;
+  category?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -38,6 +47,8 @@ export interface Customer {
 export interface InvoiceItem {
   productId: string;
   productName: string;
+  productType?: ProductType;
+  cartonSize?: CartonSize;
   pricePerLiter: number;       // actual product price
   appliedPrice: number;        // price used for this invoice (flexible)
   quantity: number;
@@ -95,6 +106,14 @@ export interface Payment {
   createdAt: string;
 }
 
+export interface CustomerLedger {
+  id: string;
+  customerId: string;
+  customerName: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Supplier {
   id: string;
   name: string;
@@ -107,7 +126,9 @@ export interface Supplier {
 export interface StockPurchaseItem {
   productId: string;
   productName: string;
-  category: string;
+  productType?: ProductType;
+  cartonSize?: CartonSize;
+  category?: string;
   quantity: number;
   pricePerLiter: number;
   total: number;
@@ -146,30 +167,12 @@ export interface SupplierPayment {
   createdAt: string;
 }
 
-export interface OilCategory {
-  id: string;
-  name: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
 export interface ShopSettings {
   shopAddress: string;
   shopPhone: string;
   thankYouMessage: string;
   printerName: string;
 }
-
-export const DEFAULT_CATEGORY_NAMES = [
-  'Engine Oil',
-  'Gear Oil',
-  'Hydraulic Oil',
-  'Brake Fluid',
-  'Coolant',
-  'Transmission Fluid',
-  'Grease',
-  'Other',
-];
 
 const DEFAULT_SETTINGS: ShopSettings = {
   shopAddress: '',
@@ -195,13 +198,11 @@ const BACKUP_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 const listCache = new Map<string, unknown[]>();
 let settingsCacheKey = '';
 let settingsCache: ShopSettings | null = null;
-let categoriesDedupeChecked = false;
 
 export function clearStorageCache(): void {
   listCache.clear();
   settingsCacheKey = '';
   settingsCache = null;
-  categoriesDedupeChecked = false;
   invalidateAllShopQueries();
 }
 
@@ -230,12 +231,16 @@ function generatePurchaseSlipNumber(orderDate?: string, manualNumber?: string): 
 }
 
 function addStockForPurchaseItem(item: StockPurchaseItem): string {
+  const itemType = normalizeProductType(item.productType);
   if (item.productId) {
     productStorage.updateStock(item.productId, item.quantity);
     return item.productId;
   }
   const existing = productStorage.getAll().find(
-    p => p.name.toLowerCase() === item.productName.toLowerCase()
+    (p) =>
+      p.name.toLowerCase() === item.productName.toLowerCase() &&
+      normalizeProductType(p.productType) === itemType &&
+      (itemType === 'oil' || p.cartonSize === item.cartonSize),
   );
   if (existing) {
     productStorage.updateStock(existing.id, item.quantity);
@@ -243,7 +248,8 @@ function addStockForPurchaseItem(item: StockPurchaseItem): string {
   }
   const created = productStorage.add({
     name: item.productName,
-    category: item.category,
+    productType: itemType,
+    cartonSize: itemType === 'carton' ? item.cartonSize : undefined,
     pricePerLiter: item.pricePerLiter,
     stock: item.quantity,
   });
@@ -273,47 +279,11 @@ function setAll<T>(key: string, data: T[]): void {
   const cacheKey = scopedKey(key);
   localStorage.setItem(cacheKey, JSON.stringify(data));
   listCache.set(cacheKey, data);
-  if (key === 'categories') categoriesDedupeChecked = false;
   markTenantDataDirty();
   const scopes = storageKeyToScopes(key);
   if (scopes.length > 0) {
     invalidateShopQueries(scopes);
   }
-}
-
-function cascadeCategoryRename(oldName: string, newName: string): void {
-  const oldKey = oldName.toLowerCase();
-  const products = getAll<Product>('products');
-  let productsChanged = false;
-  products.forEach(p => {
-    if (p.category === oldName || p.category.toLowerCase() === oldKey) {
-      p.category = newName;
-      p.updatedAt = new Date().toISOString();
-      productsChanged = true;
-    }
-  });
-  if (productsChanged) setAll('products', products);
-
-  const purchases = getAll<StockPurchase>('stockPurchases');
-  let purchasesChanged = false;
-  purchases.forEach(pur => {
-    let itemChanged = false;
-    pur.items.forEach(item => {
-      if (item.category === oldName || item.category.toLowerCase() === oldKey) {
-        item.category = newName;
-        itemChanged = true;
-      }
-    });
-    if (itemChanged) {
-      pur.updatedAt = new Date().toISOString();
-      purchasesChanged = true;
-    }
-  });
-  if (purchasesChanged) setAll('stockPurchases', purchases);
-}
-
-function mergeDuplicateCategory(duplicate: OilCategory, keeper: OilCategory): void {
-  cascadeCategoryRename(duplicate.name, keeper.name);
 }
 
 function cascadeSupplierName(supplierId: string, newName: string): void {
@@ -357,7 +327,16 @@ export const productStorage = {
   getById: (id: string): Product | undefined => getAll<Product>('products').find(p => p.id === id),
   add: (product: Omit<Product, 'id' | 'createdAt' | 'updatedAt'>): Product => {
     const products = getAll<Product>('products');
-    const newProduct: Product = { ...product, id: generateId(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const productType = normalizeProductType(product.productType);
+    const newProduct: Product = {
+      ...product,
+      productType,
+      cartonSize: productType === 'carton' ? product.cartonSize : undefined,
+      category: product.category ?? '',
+      id: generateId(),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
     products.push(newProduct);
     setAll('products', products);
     return newProduct;
@@ -565,6 +544,7 @@ export const paymentStorage = {
     const newPayment: Payment = { ...payment, id: generateId(), createdAt: at };
     payments.push(newPayment);
     setAll('payments', payments);
+    customerLedgerStorage.touch(payment.customerId);
     return newPayment;
   },
   removeByInvoiceId: (invoiceId: string): void => {
@@ -635,159 +615,73 @@ export const paymentStorage = {
       note: note.trim() || defaultNote,
     }, timestamp);
   },
+  addLedgerEntry: (
+    customerId: string,
+    customerName: string,
+    amount: number,
+    type: 'debit' | 'credit',
+    note: string,
+    options?: { orderDate?: string; applyToInvoices?: boolean },
+  ): Payment => {
+    if (type === 'credit') {
+      return paymentStorage.addManualPayment(
+        customerId,
+        customerName,
+        amount,
+        note,
+        options,
+      );
+    }
+    return paymentStorage.addHistoricalLedgerEntry(
+      customerId,
+      customerName,
+      amount,
+      'debit',
+      note,
+      options?.orderDate,
+    );
+  },
 };
 
-// Oil categories
-export const categoryStorage = {
-  ensureInitialized: (): void => {
-    const existing = getAll<OilCategory>('categories');
-    if (existing.length > 0) return;
-    const seeded = DEFAULT_CATEGORY_NAMES.map(name => ({
+export const customerLedgerStorage = {
+  getAll: (): CustomerLedger[] =>
+    getAll<CustomerLedger>('customerLedgers').sort(
+      (a, b) =>
+        new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+    ),
+  getByCustomerId: (customerId: string): CustomerLedger | undefined =>
+    getAll<CustomerLedger>('customerLedgers').find(
+      (ledger) => ledger.customerId === customerId,
+    ),
+  hasForCustomer: (customerId: string): boolean =>
+    Boolean(customerLedgerStorage.getByCustomerId(customerId)),
+  create: (
+    customerId: string,
+    customerName: string,
+  ): CustomerLedger | undefined => {
+    if (customerLedgerStorage.hasForCustomer(customerId)) return undefined;
+    const ledgers = getAll<CustomerLedger>('customerLedgers');
+    const now = new Date().toISOString();
+    const ledger: CustomerLedger = {
       id: generateId(),
-      name,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    }));
-    setAll('categories', seeded);
+      customerId,
+      customerName,
+      createdAt: now,
+      updatedAt: now,
+    };
+    ledgers.push(ledger);
+    setAll('customerLedgers', ledgers);
+    return ledger;
   },
-  /** Remove duplicate names (case-insensitive) so cloud sync can succeed. */
-  dedupe: (): boolean => {
-    const categories = getAll<OilCategory>('categories');
-    const keeperByKey = new Map<string, OilCategory>();
-    const removeIds = new Set<string>();
-
-    for (const c of categories) {
-      const key = c.name.toLowerCase();
-      const existing = keeperByKey.get(key);
-      if (!existing) {
-        keeperByKey.set(key, c);
-        continue;
-      }
-      const keeper =
-        existing.createdAt <= c.createdAt ? existing : c;
-      const duplicate = keeper === existing ? c : existing;
-      if (keeper !== existing) keeperByKey.set(key, keeper);
-      mergeDuplicateCategory(duplicate, keeper);
-      removeIds.add(duplicate.id);
-    }
-
-    if (removeIds.size === 0) return false;
-    setAll(
-      'categories',
-      categories.filter(c => !removeIds.has(c.id))
-    );
-    notifyCategoriesUpdated();
-    return true;
-  },
-  /** Use cloud row ids when the same category name already exists remotely. */
-  alignIdsWithCloud: (cloudCategories: { id: string; name: string }[]): boolean => {
-    const cloudByName = new Map(
-      cloudCategories.map(c => [c.name.toLowerCase(), c.id])
-    );
-    const categories = getAll<OilCategory>('categories');
-    let changed = false;
-    for (const c of categories) {
-      const cloudId = cloudByName.get(c.name.toLowerCase());
-      if (cloudId && cloudId !== c.id) {
-        c.id = cloudId;
-        c.updatedAt = new Date().toISOString();
-        changed = true;
-      }
-    }
-    if (changed) {
-      setAll('categories', categories);
-      notifyCategoriesUpdated();
-    }
-    return changed;
-  },
-  getAll: (): OilCategory[] => {
-    categoryStorage.ensureInitialized();
-    if (!categoriesDedupeChecked) {
-      categoryStorage.dedupe();
-      categoriesDedupeChecked = true;
-    }
-    return getAll<OilCategory>('categories').sort((a, b) => a.name.localeCompare(b.name));
-  },
-  getNames: (): string[] => categoryStorage.getAll().map(c => c.name),
-  getById: (id: string): OilCategory | undefined => categoryStorage.getAll().find(c => c.id === id),
-  getUsage: (categoryName: string): {
-    productCount: number;
-    purchaseLineCount: number;
-    inStockLiters: number;
-    products: Product[];
-  } => {
-    const products = productStorage.getAll().filter(p => p.category === categoryName);
-    let purchaseLineCount = 0;
-    stockPurchaseStorage.getAll().forEach(pur => {
-      purchaseLineCount += pur.items.filter(i => i.category === categoryName).length;
-    });
-    const inStockLiters = products.reduce((s, p) => s + p.stock, 0);
-    return { productCount: products.length, purchaseLineCount, inStockLiters, products };
-  },
-  add: (name: string): { success: boolean; category?: OilCategory; message?: string } => {
-    const trimmed = name.trim();
-    if (trimmed.length < 2) return { success: false, message: 'Name must be at least 2 characters' };
-    const categories = categoryStorage.getAll();
-    if (categories.some(c => c.name.toLowerCase() === trimmed.toLowerCase())) {
-      return { success: false, message: 'Category already exists' };
-    }
-    const newCategory: OilCategory = {
-      id: generateId(),
-      name: trimmed,
-      createdAt: new Date().toISOString(),
+  touch: (customerId: string): void => {
+    const ledgers = getAll<CustomerLedger>('customerLedgers');
+    const idx = ledgers.findIndex((ledger) => ledger.customerId === customerId);
+    if (idx === -1) return;
+    ledgers[idx] = {
+      ...ledgers[idx],
       updatedAt: new Date().toISOString(),
     };
-    categories.push(newCategory);
-    setAll('categories', categories);
-    notifyCategoriesUpdated();
-    return { success: true, category: newCategory };
-  },
-  update: (id: string, name: string): { success: boolean; category?: OilCategory; message?: string } => {
-    const trimmed = name.trim();
-    if (trimmed.length < 2) return { success: false, message: 'Name must be at least 2 characters' };
-    const categories = getAll<OilCategory>('categories');
-    const idx = categories.findIndex(c => c.id === id);
-    if (idx === -1) return { success: false, message: 'Category not found' };
-    const duplicate = categories.find(c => c.id !== id && c.name.toLowerCase() === trimmed.toLowerCase());
-    if (duplicate) return { success: false, message: 'Another category already uses this name' };
-    const oldName = categories[idx].name;
-    if (oldName !== trimmed) {
-      cascadeCategoryRename(oldName, trimmed);
-    }
-    categories[idx] = { ...categories[idx], name: trimmed, updatedAt: new Date().toISOString() };
-    setAll('categories', categories);
-    notifyCategoriesUpdated();
-    return { success: true, category: categories[idx] };
-  },
-  delete: (
-    id: string,
-    reassignTo?: string
-  ): { success: boolean; message: string } => {
-    const categories = getAll<OilCategory>('categories');
-    const idx = categories.findIndex(c => c.id === id);
-    if (idx === -1) return { success: false, message: 'Category not found' };
-    if (categories.length <= 1) {
-      return { success: false, message: 'You must keep at least one category' };
-    }
-    const category = categories[idx];
-    const usage = categoryStorage.getUsage(category.name);
-
-    if (usage.productCount > 0 || usage.purchaseLineCount > 0) {
-      if (!reassignTo) {
-        return {
-          success: false,
-          message: `Cannot delete: ${usage.productCount} product(s) and ${usage.purchaseLineCount} purchase line(s) use this category. Choose a category to reassign them to.`,
-        };
-      }
-      const target = categories.find(c => c.id === reassignTo || c.name === reassignTo);
-      if (!target) return { success: false, message: 'Reassign target category not found' };
-      if (target.id === id) return { success: false, message: 'Choose a different category to reassign to' };
-      cascadeCategoryRename(category.name, target.name);
-    }
-
-    setAll('categories', categories.filter(c => c.id !== id));
-    notifyCategoriesUpdated();
-    return { success: true, message: 'Category deleted' };
+    setAll('customerLedgers', ledgers);
   },
 };
 
@@ -851,7 +745,9 @@ export const stockPurchaseStorage = {
             ...item,
             productId,
             productName: product?.name ?? item.productName,
-            category: product?.category ?? item.category,
+            productType: product?.productType ?? item.productType ?? 'oil',
+            cartonSize: product?.cartonSize ?? item.cartonSize,
+            category: product?.category ?? item.category ?? '',
           };
         });
     const newPurchase: StockPurchase = {
@@ -1031,10 +927,10 @@ export const backupStorage = {
     const data = {
       products: productStorage.getAll(),
       customers: customerStorage.getAll(),
-      categories: categoryStorage.getAll(),
       suppliers: supplierStorage.getAll(),
       invoices: invoiceStorage.getAll(),
       payments: paymentStorage.getAll(),
+      customerLedgers: customerLedgerStorage.getAll(),
       stockPurchases: stockPurchaseStorage.getAll(),
       supplierPayments: supplierPaymentStorage.getAll(),
       settings: settingsStorage.get(),
@@ -1050,11 +946,10 @@ export const backupStorage = {
       }
       setAll('products', data.products);
       setAll('customers', data.customers);
-      if (data.categories) setAll('categories', data.categories);
-      else categoryStorage.ensureInitialized();
       if (data.suppliers) setAll('suppliers', data.suppliers);
       setAll('invoices', data.invoices);
       if (data.payments) setAll('payments', data.payments);
+      if (data.customerLedgers) setAll('customerLedgers', data.customerLedgers);
       if (data.stockPurchases) setAll('stockPurchases', data.stockPurchases);
       if (data.supplierPayments) setAll('supplierPayments', data.supplierPayments);
       if (data.settings) {
@@ -1065,8 +960,6 @@ export const backupStorage = {
         settingsCacheKey = scopedKey('settings');
         settingsCache = settings;
       }
-      categoryStorage.dedupe();
-      categoriesDedupeChecked = true;
       invalidateAllShopQueries();
       return { success: true, message: 'Data restored successfully' };
     } catch {
@@ -1080,10 +973,4 @@ export const SETTINGS_UPDATED_EVENT = 'oilshop-settings-updated';
 
 export function notifySettingsUpdated(): void {
   window.dispatchEvent(new Event(SETTINGS_UPDATED_EVENT));
-}
-
-export const CATEGORIES_UPDATED_EVENT = 'oilshop-categories-updated';
-
-export function notifyCategoriesUpdated(): void {
-  window.dispatchEvent(new Event(CATEGORIES_UPDATED_EVENT));
 }

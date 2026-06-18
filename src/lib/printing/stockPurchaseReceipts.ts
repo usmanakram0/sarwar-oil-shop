@@ -1,5 +1,6 @@
 import { formatMoney } from '@/lib/currency';
 import type { StockPurchase } from '@/lib/storage';
+import { formatLineItemQuantityWithUnit } from '@/lib/productTypes';
 import {
   buildMetaTableRows,
   buildReceiptDocument,
@@ -65,10 +66,10 @@ export function buildStockPurchaseReceiptBody(context: StockPurchaseReceiptConte
       </div>
       <hr />
       <table class="meta-table">${metaRows}</table>
-      <div class="products-table cols-5">
+      <div class="products-table cols-4">
         <table>
           <thead>
-            <tr><th>Item</th><th>Category</th><th>Qty</th><th>Rate</th><th>Total</th></tr>
+            <tr><th>Item</th><th>Qty</th><th>Rate</th><th>Total</th></tr>
           </thead>
           <tbody>
             ${purchase.items
@@ -76,8 +77,7 @@ export function buildStockPurchaseReceiptBody(context: StockPurchaseReceiptConte
                 (item) => `
               <tr>
                 <td>${item.productName}</td>
-                <td>${item.category}</td>
-                <td>${item.quantity.toLocaleString()} L</td>
+                <td>${formatLineItemQuantityWithUnit(item)}</td>
                 <td>${formatMoney(item.pricePerLiter, 0)}</td>
                 <td>${formatMoney(item.total, 0)}</td>
               </tr>`

@@ -2,7 +2,6 @@ import { SHOP_NAME } from '@/lib/shop';
 import { getSession } from '@/lib/auth';
 import { isSupabaseConfigured, supabase } from '@/lib/supabase/client';
 import {
-  categoryStorage,
   customerStorage,
   invoiceStorage,
   paymentStorage,
@@ -13,7 +12,6 @@ import {
   supplierStorage,
   type Customer,
   type Invoice,
-  type OilCategory,
   type Payment,
   type Product,
   type ShopSettings,
@@ -46,24 +44,16 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
-function mapCategory(c: OilCategory, tenantId: string) {
-  return {
-    id: c.id,
-    tenant_id: tenantId,
-    name: c.name,
-    created_at: c.createdAt,
-    updated_at: c.updatedAt,
-  };
-}
-
 function mapProduct(p: Product, tenantId: string) {
   return {
     id: p.id,
     tenant_id: tenantId,
     name: p.name,
+    product_type: p.productType ?? 'oil',
+    carton_size: p.cartonSize ?? null,
     price_per_liter: p.pricePerLiter,
     stock: p.stock,
-    category: p.category,
+    category: p.category ?? '',
     created_at: p.createdAt,
     updated_at: p.updatedAt,
   };
@@ -231,20 +221,6 @@ export async function pushLocalDataToSupabase(): Promise<{
   const tenantId = session.tenantId;
 
   try {
-    categoryStorage.dedupe();
-    const { data: cloudCategories, error: catFetchError } = await supabase
-      .from('categories')
-      .select('id, name')
-      .eq('tenant_id', tenantId);
-    if (catFetchError) throw new Error(`categories: ${catFetchError.message}`);
-    if (cloudCategories?.length) {
-      categoryStorage.alignIdsWithCloud(cloudCategories);
-    }
-
-    await pushTable(
-      'categories',
-      categoryStorage.getAll().map(c => mapCategory(c, tenantId))
-    );
     await pushTable(
       'products',
       productStorage.getAll().map(p => mapProduct(p, tenantId))

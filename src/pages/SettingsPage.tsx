@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button";
 
 import { Input } from "@/components/ui/input";
 
-import { Label } from "@/components/ui/label";
+import { FormLabel } from "@/components/ui/FormLabel";
 
 import {
   settingsStorage,
@@ -146,19 +146,19 @@ export default function SettingsPage() {
             </div> */}
 
             <div>
-              <Label>Address</Label>
+              <FormLabel>Address</FormLabel>
 
               <Input {...form.register("shopAddress")} />
             </div>
 
             <div>
-              <Label>Phone</Label>
+              <FormLabel>Phone</FormLabel>
 
               <Input {...form.register("shopPhone")} />
             </div>
 
             <div>
-              <Label>Invoice "Thanks" Message</Label>
+              <FormLabel>Invoice "Thanks" Message</FormLabel>
 
               <Input {...form.register("thankYouMessage")} />
             </div>

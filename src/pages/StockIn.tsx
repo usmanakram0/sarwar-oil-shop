@@ -6,13 +6,16 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import ListPagination from '@/components/ui/ListPagination';
 import { formatMoney } from '@/lib/currency';
 import { useStockPurchasesList } from '@/hooks/useShopData';
 import { useStockPurchaseMutations } from '@/hooks/useShopMutations';
+import { usePagination } from '@/hooks/usePagination';
 import { safeNumber } from '@/lib/query/safe';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 import ConfirmDeleteDialog from '@/components/ConfirmDeleteDialog';
+import { formatPurchaseQtySummary } from '@/lib/productTypes';
 import type { StockPurchase } from '@/lib/storage';
 
 export default function StockIn() {
@@ -33,6 +36,16 @@ export default function StockIn() {
         return matchSearch && matchStatus;
       });
   }, [purchases, search, statusFilter]);
+
+  const {
+    paginatedItems: paginatedPurchases,
+    page,
+    setPage,
+    pageSize,
+    setPageSize,
+    totalItems,
+    totalPages,
+  } = usePagination(filtered, [search, statusFilter]);
 
   const confirmDelete = () => {
     if (!deleteTarget) return;
@@ -90,9 +103,9 @@ export default function StockIn() {
         <Card><CardContent className="py-12 text-center text-muted-foreground">No purchases found</CardContent></Card>
       ) : (
         <div className="space-y-3">
-          {filtered.map(pur => {
+          {paginatedPurchases.map(pur => {
             const remaining = pur.remainingAmount ?? (pur.total - (pur.paidAmount || 0));
-            const qtyTotal = pur.items.reduce((s, i) => s + i.quantity, 0);
+            const qtySummary = formatPurchaseQtySummary(pur.items);
             return (
               <Card key={pur.id} className="group hover:shadow-md transition-shadow">
                 <CardContent className="py-4">
@@ -112,7 +125,7 @@ export default function StockIn() {
                           {statusBadge(pur.status)}
                         </div>
                         <p className="text-xs text-muted-foreground">
-                          {pur.supplierName} · {qtyTotal}L · {format(new Date(pur.createdAt), 'dd MMM yyyy')}{pur.vehicleNumber ? ` · ${pur.vehicleNumber}` : ''}
+                          {pur.supplierName} · {qtySummary} · {format(new Date(pur.createdAt), 'dd MMM yyyy')}{pur.vehicleNumber ? ` · ${pur.vehicleNumber}` : ''}
                         </p>
                       </div>
                     </div>
@@ -137,6 +150,14 @@ export default function StockIn() {
               </Card>
             );
           })}
+          <ListPagination
+            page={page}
+            totalPages={totalPages}
+            totalItems={totalItems}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+          />
         </div>
       )}
 

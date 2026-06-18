@@ -10,7 +10,6 @@ export type InvalidationScope =
 
 const STORAGE_KEY_TO_SCOPE: Record<ShopStorageKey, InvalidationScope[]> = {
   products: ['products', 'dashboard', 'ledger'],
-  categories: ['categories', 'products'],
   customers: ['customers', 'dashboard', 'ledger'],
   suppliers: ['suppliers', 'stockPurchases', 'supplierPayments'],
   invoices: ['invoices', 'payments', 'products', 'dashboard', 'ledger'],
@@ -21,7 +20,6 @@ const STORAGE_KEY_TO_SCOPE: Record<ShopStorageKey, InvalidationScope[]> = {
 
 const SCOPE_TO_QUERY_KEYS: Record<InvalidationScope, readonly (readonly unknown[])[]> = {
   products: [queryKeys.products, queryKeys.dashboard],
-  categories: [queryKeys.categories, queryKeys.categoryNames, queryKeys.products],
   customers: [queryKeys.customers, queryKeys.dashboard, queryKeys.root],
   suppliers: [queryKeys.suppliers],
   invoices: [queryKeys.invoices, queryKeys.dashboard],
@@ -30,7 +28,7 @@ const SCOPE_TO_QUERY_KEYS: Record<InvalidationScope, readonly (readonly unknown[
   supplierPayments: [queryKeys.supplierPayments],
   settings: [queryKeys.settings],
   dashboard: [queryKeys.dashboard],
-  ledger: [queryKeys.payments, queryKeys.invoices, queryKeys.customers, queryKeys.root],
+  ledger: [queryKeys.payments, queryKeys.invoices, queryKeys.customers, queryKeys.customerLedgers, queryKeys.root],
   all: [queryKeys.root],
 };
 
@@ -87,7 +85,8 @@ export function invalidateShopQueries(
           return (
             second === 'payments' ||
             second === 'invoices' ||
-            second === 'ledger'
+            second === 'ledger' ||
+            second === 'customerLedgers'
           );
         },
       });

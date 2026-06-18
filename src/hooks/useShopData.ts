@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import {
-  categoryStorage,
   customerStorage,
+  customerLedgerStorage,
   invoiceStorage,
   paymentStorage,
   productStorage,
@@ -9,8 +9,8 @@ import {
   stockPurchaseStorage,
   supplierStorage,
   type Customer,
+  type CustomerLedger,
   type Invoice,
-  type OilCategory,
   type Payment,
   type Product,
   type ShopSettings,
@@ -42,24 +42,6 @@ export function useProductsList() {
     ...query,
     products: safeArray(query.data),
   };
-}
-
-export function useCategoriesQuery() {
-  return useQuery({
-    queryKey: queryKeys.categories,
-    queryFn: safeQueryFn(() => categoryStorage.getAll(), [] as OilCategory[]),
-    placeholderData: [] as OilCategory[],
-    ...OFFLINE_QUERY_OPTIONS,
-  });
-}
-
-export function useCategoryNamesQuery() {
-  return useQuery({
-    queryKey: queryKeys.categoryNames,
-    queryFn: safeQueryFn(() => categoryStorage.getNames(), [] as string[]),
-    placeholderData: [] as string[],
-    ...OFFLINE_QUERY_OPTIONS,
-  });
 }
 
 export function useCustomersQuery() {
@@ -194,6 +176,23 @@ export function useCustomerBalanceQuery(customerId: string) {
     placeholderData: { totalDebit: 0, totalCredit: 0, balance: 0 },
     ...OFFLINE_QUERY_OPTIONS,
   });
+}
+
+export function useCustomerLedgersQuery() {
+  return useQuery({
+    queryKey: queryKeys.customerLedgers,
+    queryFn: safeQueryFn(() => customerLedgerStorage.getAll(), [] as CustomerLedger[]),
+    placeholderData: [] as CustomerLedger[],
+    ...OFFLINE_QUERY_OPTIONS,
+  });
+}
+
+export function useCustomerLedgersList() {
+  const query = useCustomerLedgersQuery();
+  return {
+    ...query,
+    ledgers: safeArray(query.data),
+  };
 }
 
 export function useStockPurchasesQuery() {

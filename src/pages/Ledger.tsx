@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useRef } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { Link } from "react-router-dom";
 import {
   Download,
@@ -8,12 +8,13 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   Wallet,
-  History,
+  Plus,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { FormLabel } from "@/components/ui/FormLabel";
 import { DatePickerField } from "@/components/ui/date-picker";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -42,48 +43,54 @@ import { SHOP_NAME } from '@/lib/shop';
 import { CURRENCY, formatMoney, formatMoneyWhole, formatMoneyWithSign } from '@/lib/currency';
 import { formatDateInputValue, validateOrderDate } from '@/lib/historicalEntry';
 import {
+  buildLedgerCustomerList,
+  filterLedgerCustomers,
+} from '@/lib/ledgerCustomers';
+import { isWalkingCustomer } from '@/lib/walkingCustomer';
+import {
   useCustomerBalanceQuery,
   useCustomerInvoicesQuery,
+  useCustomerLedgersList,
   useCustomerPaymentsQuery,
   useCustomersList,
+  useInvoicesList,
   usePaymentsQuery,
   useSettingsQuery,
 } from '@/hooks/useShopData';
-import { usePaymentMutations } from '@/hooks/useShopMutations';
+import { useCustomerLedgerMutations, usePaymentMutations } from '@/hooks/useShopMutations';
+import { usePagination } from '@/hooks/usePagination';
+import ListPagination from '@/components/ui/ListPagination';
 import { safeArray, safeString } from '@/lib/query/safe';
 import {
   format,
-  isWithinInterval,
   parseISO,
   startOfDay,
   endOfDay,
 } from "date-fns";
 import { toast } from "sonner";
 
-const ITEMS_PER_PAGE = 20;
-
 export default function Ledger() {
   const { customers } = useCustomersList();
+  const { ledgers } = useCustomerLedgersList();
   const { data: settings } = useSettingsQuery();
-  const { addManualPayment, addHistoricalLedgerEntry } = usePaymentMutations();
-  usePaymentsQuery();
+  const { data: allPayments = [] } = usePaymentsQuery();
+  const { invoices } = useInvoicesList();
+  const { addLedgerEntry } = usePaymentMutations();
+  const { create: createLedger } = useCustomerLedgerMutations();
   const cur = CURRENCY;
 
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [search, setSearch] = useState("");
-  const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
-  const [payAmount, setPayAmount] = useState<number | "">("");
-  const [payNote, setPayNote] = useState("");
-  const [payOrderDate, setPayOrderDate] = useState(formatDateInputValue());
-  const [isHistoricalPayment, setIsHistoricalPayment] = useState(false);
-  const [historicalDialogOpen, setHistoricalDialogOpen] = useState(false);
-  const [historicalType, setHistoricalType] = useState<"debit" | "credit">("debit");
-  const [historicalAmount, setHistoricalAmount] = useState<number | "">("");
-  const [historicalDate, setHistoricalDate] = useState(formatDateInputValue());
-  const [historicalNote, setHistoricalNote] = useState("");
-  const [visibleCount, setVisibleCount] = useState(ITEMS_PER_PAGE);
+  const [createLedgerDialogOpen, setCreateLedgerDialogOpen] = useState(false);
+  const [createLedgerCustomerId, setCreateLedgerCustomerId] = useState("");
+  const [entryDialogOpen, setEntryDialogOpen] = useState(false);
+  const [entryType, setEntryType] = useState<"debit" | "credit">("credit");
+  const [entryAmount, setEntryAmount] = useState<number | "">("");
+  const [entryNote, setEntryNote] = useState("");
+  const [useOldDate, setUseOldDate] = useState(false);
+  const [entryDate, setEntryDate] = useState(formatDateInputValue());
 
   const { data: balanceData } = useCustomerBalanceQuery(selectedCustomerId);
   const { data: customerPayments = [] } = useCustomerPaymentsQuery(selectedCustomerId);
@@ -115,10 +122,15 @@ export default function Ledger() {
     );
   }, [selectedCustomerId, customerPayments, dateFrom, dateTo]);
 
-  const visibleEntries = useMemo(
-    () => ledgerEntries.slice(0, visibleCount),
-    [ledgerEntries, visibleCount],
-  );
+  const {
+    paginatedItems: paginatedLedgerEntries,
+    page: ledgerPage,
+    setPage: setLedgerPage,
+    pageSize: ledgerPageSize,
+    setPageSize: setLedgerPageSize,
+    totalItems: ledgerTotalItems,
+    totalPages: ledgerTotalPages,
+  } = usePagination(ledgerEntries, [selectedCustomerId, dateFrom, dateTo]);
 
   const filteredTotals = useMemo(() => {
     const debit = ledgerEntries
@@ -130,82 +142,133 @@ export default function Ledger() {
     return { debit, credit, balance: debit - credit };
   }, [ledgerEntries]);
 
-  const filteredCustomers = useMemo(
+  const allLedgerCustomers = useMemo(
     () =>
-      customers.filter(
-        (c) =>
-          c.name.toLowerCase().includes(search.toLowerCase()) ||
-          c.phone.includes(search),
+      buildLedgerCustomerList(
+        customers,
+        safeArray(allPayments),
+        invoices,
+        ledgers,
       ),
-    [customers, search],
+    [customers, allPayments, invoices, ledgers],
   );
 
-  const handleRecordPayment = () => {
-    if (!selectedCustomerId || !payAmount || payAmount <= 0) {
-      toast.error("Enter a valid payment amount");
+  const filteredLedgerCustomers = useMemo(
+    () => filterLedgerCustomers(allLedgerCustomers, customers, search),
+    [allLedgerCustomers, customers, search],
+  );
+
+  const customersWithoutLedger = useMemo(() => {
+    const visibleIds = new Set(
+      allLedgerCustomers.map((row) => row.customerId),
+    );
+    return customers.filter(
+      (customer) =>
+        !isWalkingCustomer(customer.id) && !visibleIds.has(customer.id),
+    );
+  }, [customers, allLedgerCustomers]);
+
+  const {
+    paginatedItems: paginatedLedgers,
+    page: customerPage,
+    setPage: setCustomerPage,
+    pageSize: customerPageSize,
+    setPageSize: setCustomerPageSize,
+    totalItems: customerTotalItems,
+    totalPages: customerTotalPages,
+  } = usePagination(filteredLedgerCustomers, [search]);
+
+  const {
+    paginatedItems: paginatedCustomerInvoices,
+    page: ordersPage,
+    setPage: setOrdersPage,
+    pageSize: ordersPageSize,
+    setPageSize: setOrdersPageSize,
+    totalItems: ordersTotalItems,
+    totalPages: ordersTotalPages,
+  } = usePagination(customerInvoices, [selectedCustomerId]);
+
+  const resetEntryForm = () => {
+    setEntryAmount("");
+    setEntryNote("");
+    setEntryType("credit");
+    setUseOldDate(false);
+    setEntryDate(formatDateInputValue());
+  };
+
+  const handleCreateLedger = () => {
+    if (!createLedgerCustomerId) {
+      toast.error("Please select a customer");
       return;
     }
-    if (isHistoricalPayment) {
-      const dateCheck = validateOrderDate(payOrderDate);
-      if (!dateCheck.valid) {
-        toast.error(dateCheck.message || "Invalid payment date");
-        return;
-      }
-    }
-    addManualPayment.mutate(
-      {
-        customerId: selectedCustomerId,
-        customerName: selectedCustomer?.name || '',
-        amount: payAmount,
-        note: payNote,
-        options: isHistoricalPayment
-          ? { orderDate: payOrderDate, applyToInvoices: false }
-          : undefined,
-      },
+    const customer = customers.find((c) => c.id === createLedgerCustomerId);
+    if (!customer) return;
+
+    createLedger.mutate(
+      { customerId: customer.id, customerName: customer.name },
       {
         onSuccess: () => {
-          toast.success(`Payment of ${formatMoney(Number(payAmount))} recorded`);
-          setPayAmount('');
-          setPayNote('');
-          setIsHistoricalPayment(false);
-          setPayOrderDate(formatDateInputValue());
-          setPaymentDialogOpen(false);
+          toast.success(`Ledger created for ${customer.name}`);
+          setCreateLedgerDialogOpen(false);
+          setCreateLedgerCustomerId("");
+          setSelectedCustomerId(customer.id);
         },
-        onError: () => toast.error('Could not record payment'),
-      }
+        onError: (error) => {
+          const message =
+            error instanceof Error ? error.message : "Could not create ledger";
+          if (message.includes("already exists")) {
+            toast.error("This customer already has a ledger");
+            setSelectedCustomerId(customer.id);
+            setCreateLedgerDialogOpen(false);
+            return;
+          }
+          toast.error("Could not create ledger");
+        },
+      },
     );
   };
 
-  const handleAddHistoricalEntry = () => {
-    if (!selectedCustomerId || !historicalAmount || historicalAmount <= 0) {
+  const handleAddLedgerEntry = () => {
+    if (!selectedCustomerId || !entryAmount || entryAmount <= 0) {
       toast.error("Enter a valid amount");
       return;
     }
-    const dateCheck = validateOrderDate(historicalDate);
-    if (!dateCheck.valid) {
-      toast.error(dateCheck.message || "Invalid date");
-      return;
+    if (useOldDate) {
+      const dateCheck = validateOrderDate(entryDate);
+      if (!dateCheck.valid) {
+        toast.error(dateCheck.message || "Invalid entry date");
+        return;
+      }
     }
-    addHistoricalLedgerEntry.mutate(
+
+    const options = useOldDate
+      ? {
+          orderDate: entryDate,
+          applyToInvoices: entryType === "credit" ? false : undefined,
+        }
+      : undefined;
+
+    addLedgerEntry.mutate(
       {
         customerId: selectedCustomerId,
-        customerName: selectedCustomer?.name || '',
-        amount: historicalAmount,
-        type: historicalType,
-        note: historicalNote,
-        orderDate: historicalDate,
+        customerName: selectedCustomer?.name || "",
+        amount: entryAmount,
+        type: entryType,
+        note: entryNote,
+        options,
       },
       {
         onSuccess: () => {
-          toast.success('Old ledger entry added');
-          setHistoricalAmount('');
-          setHistoricalNote('');
-          setHistoricalDate(formatDateInputValue());
-          setHistoricalType('debit');
-          setHistoricalDialogOpen(false);
+          const label =
+            entryType === "debit" ? "Pending amount" : "Payment";
+          toast.success(
+            `${label} of ${formatMoney(Number(entryAmount))} recorded`,
+          );
+          resetEntryForm();
+          setEntryDialogOpen(false);
         },
-        onError: () => toast.error('Could not add ledger entry'),
-      }
+        onError: () => toast.error("Could not add ledger entry"),
+      },
     );
   };
 
@@ -327,13 +390,19 @@ export default function Ledger() {
 
   return (
     <div className="space-y-4 pb-16 lg:pb-0 animate-fade-in">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
             <BookOpen className="w-5 h-5 text-primary" />
           </div>
           <h1 className="text-2xl font-heading font-bold">Customer Ledger</h1>
         </div>
+        {!selectedCustomerId && (
+          <Button onClick={() => setCreateLedgerDialogOpen(true)}>
+            <Plus className="w-4 h-4 mr-1" />
+            Create Ledger
+          </Button>
+        )}
       </div>
 
       {/* Customer Search & Select */}
@@ -341,8 +410,10 @@ export default function Ledger() {
         <div className="space-y-4">
           <Card className="border-dashed border-amber-400/50 bg-amber-50/30 dark:bg-amber-950/20">
             <CardContent className="pt-4 pb-4 text-sm text-muted-foreground">
-              Rebuilding old books? Select a customer, then use <strong>Add Old Ledger Entry</strong> for opening balances
-              and old payments, or <strong>Add Old Order</strong> to enter past invoices with their original date.
+              Customers with invoices or payments appear here automatically.
+              Use <strong>Create Ledger</strong> only when you want to track a
+              customer manually without adding invoices. Use{" "}
+              <strong>Add Ledger Entry</strong> for pending amounts or payments.
             </CardContent>
           </Card>
           <div className="relative">
@@ -355,20 +426,27 @@ export default function Ledger() {
             />
           </div>
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {filteredCustomers.map((c) => {
-              const bal = paymentStorage.getCustomerBalance(c.id);
+            {paginatedLedgers.map((row) => {
+              const customer = customers.find((c) => c.id === row.customerId);
+              const bal = paymentStorage.getCustomerBalance(row.customerId);
+              const displayName = customer?.name || row.customerName;
               return (
                 <Card
-                  key={c.id}
+                  key={row.customerId}
                   className="cursor-pointer hover:border-primary/50 transition-all hover:shadow-md"
-                  onClick={() => setSelectedCustomerId(c.id)}>
+                  onClick={() => setSelectedCustomerId(row.customerId)}>
                   <CardContent className="pt-4 pb-4">
                     <div className="flex items-center justify-between">
                       <div>
-                        <p className="font-heading font-semibold">{c.name}</p>
-                        {c.phone && (
+                        <p className="font-heading font-semibold">{displayName}</p>
+                        {customer?.phone && (
                           <p className="text-xs text-muted-foreground">
-                            {c.phone}
+                            {customer.phone}
+                          </p>
+                        )}
+                        {row.isManualOnly && (
+                          <p className="text-[10px] text-muted-foreground mt-1">
+                            Manual ledger
                           </p>
                         )}
                       </div>
@@ -395,10 +473,30 @@ export default function Ledger() {
               );
             })}
           </div>
-          {filteredCustomers.length === 0 && (
+          {filteredLedgerCustomers.length > 0 && (
+            <ListPagination
+              page={customerPage}
+              totalPages={customerTotalPages}
+              totalItems={customerTotalItems}
+              pageSize={customerPageSize}
+              onPageChange={setCustomerPage}
+              onPageSizeChange={setCustomerPageSize}
+            />
+          )}
+          {filteredLedgerCustomers.length === 0 && (
             <Card>
-              <CardContent className="py-12 text-center text-muted-foreground">
-                No customers found
+              <CardContent className="py-12 text-center text-muted-foreground space-y-3">
+                <p>
+                  {search
+                    ? "No customers match your search"
+                    : "No customer ledgers yet"}
+                </p>
+                {!search && (
+                  <Button onClick={() => setCreateLedgerDialogOpen(true)}>
+                    <Plus className="w-4 h-4 mr-1" />
+                    Create Ledger
+                  </Button>
+                )}
               </CardContent>
             </Card>
           )}
@@ -429,17 +527,9 @@ export default function Ledger() {
                   )}
                 </div>
                 <div className="flex gap-2 flex-wrap">
-                  <Button size="sm" onClick={() => setPaymentDialogOpen(true)}>
+                  <Button size="sm" onClick={() => setEntryDialogOpen(true)}>
                     <Wallet className="w-4 h-4 mr-1" />
-                    Record Payment
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setHistoricalDialogOpen(true)}
-                  >
-                    <History className="w-4 h-4 mr-1" />
-                    Add Old Ledger Entry
+                    Add Ledger Entry
                   </Button>
                   <Button
                     size="sm"
@@ -574,7 +664,7 @@ export default function Ledger() {
             <CardContent className="p-0">
               {ledgerEntries.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-8">
-                  No transactions found
+                  No transactions yet. Use Add Ledger Entry to record pending amounts or payments.
                 </p>
               ) : (
                 <>
@@ -594,7 +684,7 @@ export default function Ledger() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {visibleEntries.map((entry) => (
+                        {paginatedLedgerEntries.map((entry) => (
                           <TableRow key={entry.id}>
                             <TableCell className="text-xs">
                               {format(new Date(entry.createdAt), "dd/MM/yy")}
@@ -628,19 +718,14 @@ export default function Ledger() {
                       </TableBody>
                     </Table>
                   </div>
-                  {visibleCount < ledgerEntries.length && (
-                    <div className="p-3 text-center border-t">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() =>
-                          setVisibleCount((v) => v + ITEMS_PER_PAGE)
-                        }>
-                        Load more ({ledgerEntries.length - visibleCount}{" "}
-                        remaining)
-                      </Button>
-                    </div>
-                  )}
+                  <ListPagination
+                    page={ledgerPage}
+                    totalPages={ledgerTotalPages}
+                    totalItems={ledgerTotalItems}
+                    pageSize={ledgerPageSize}
+                    onPageChange={setLedgerPage}
+                    onPageSizeChange={setLedgerPageSize}
+                  />
                 </>
               )}
             </CardContent>
@@ -672,7 +757,7 @@ export default function Ledger() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {customerInvoices.map((inv) => (
+                      {paginatedCustomerInvoices.map((inv) => (
                         <TableRow key={inv.id}>
                           <TableCell>
                             <div className="flex items-center gap-2 flex-wrap">
@@ -722,21 +807,36 @@ export default function Ledger() {
                   </Table>
                 </div>
               )}
+              {customerInvoices.length > 0 && (
+                <ListPagination
+                  page={ordersPage}
+                  totalPages={ordersTotalPages}
+                  totalItems={ordersTotalItems}
+                  pageSize={ordersPageSize}
+                  onPageChange={setOrdersPage}
+                  onPageSizeChange={setOrdersPageSize}
+                />
+              )}
             </CardContent>
           </Card>
         </div>
       )}
 
-      {/* Record Payment Dialog */}
-      <Dialog open={paymentDialogOpen} onOpenChange={setPaymentDialogOpen}>
+      {/* Add Ledger Entry Dialog */}
+      <Dialog
+        open={entryDialogOpen}
+        onOpenChange={(open) => {
+          setEntryDialogOpen(open);
+          if (!open) resetEntryForm();
+        }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="font-heading">
-              Record Payment - {selectedCustomer?.name}
+              Add Ledger Entry - {selectedCustomer?.name}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            {balance && balance.balance > 0 && (
+            {balance && balance.balance > 0 && entryType === "credit" && (
               <div className="p-3 rounded-lg bg-destructive/10 text-sm">
                 Outstanding balance:{" "}
                 <strong className="text-destructive">
@@ -745,51 +845,70 @@ export default function Ledger() {
               </div>
             )}
             <div>
-              <Label>Amount ({cur})</Label>
+              <FormLabel required>Entry type</FormLabel>
+              <Select
+                value={entryType}
+                onValueChange={(v) => setEntryType(v as "debit" | "credit")}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="credit">Payment received (Credit)</SelectItem>
+                  <SelectItem value="debit">Pending amount owed (Debit)</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground mt-1">
+                {entryType === "debit"
+                  ? "Customer owes this amount — adds to their pending balance"
+                  : "Customer paid this amount — reduces their pending balance"}
+              </p>
+            </div>
+            <div>
+              <FormLabel required>Amount ({cur})</FormLabel>
               <Input
                 type="number"
                 min="0"
                 placeholder="Enter amount"
-                value={payAmount}
+                value={entryAmount}
                 onChange={(e) =>
-                  setPayAmount(
+                  setEntryAmount(
                     e.target.value === "" ? "" : Number(e.target.value),
                   )
                 }
                 autoFocus
               />
-              <p className="text-xs text-muted-foreground mt-1">
-                Can pay any amount – partial, full, or advance
-              </p>
             </div>
             <div>
-              <Label>Note (optional)</Label>
+              <FormLabel>Description</FormLabel>
               <Input
-                placeholder="e.g. Cash payment, UPI transfer..."
-                value={payNote}
-                onChange={(e) => setPayNote(e.target.value)}
+                placeholder={
+                  entryType === "debit"
+                    ? "e.g. Opening balance, old pending from March..."
+                    : "e.g. Cash payment, UPI transfer..."
+                }
+                value={entryNote}
+                onChange={(e) => setEntryNote(e.target.value)}
               />
             </div>
             <div className="flex items-start gap-3 rounded-lg border border-dashed border-amber-400/50 p-3">
               <input
-                id="historical-payment"
+                id="ledger-old-date"
                 type="checkbox"
-                checked={isHistoricalPayment}
-                onChange={(e) => setIsHistoricalPayment(e.target.checked)}
+                checked={useOldDate}
+                onChange={(e) => setUseOldDate(e.target.checked)}
                 className="mt-1"
               />
               <div className="space-y-2 flex-1">
-                <Label htmlFor="historical-payment" className="cursor-pointer">
-                  Old payment from previous records
+                <Label htmlFor="ledger-old-date" className="cursor-pointer">
+                  Entry from old records (use past date)
                 </Label>
-                {isHistoricalPayment && (
+                {useOldDate && (
                   <div>
-                    <Label className="text-xs">Payment date</Label>
+                    <FormLabel className="text-xs" required>Entry date</FormLabel>
                     <Input
                       type="date"
                       max={formatDateInputValue()}
-                      value={payOrderDate}
-                      onChange={(e) => setPayOrderDate(e.target.value)}
+                      value={entryDate}
+                      onChange={(e) => setEntryDate(e.target.value)}
                     />
                   </div>
                 )}
@@ -798,81 +917,81 @@ export default function Ledger() {
             <div className="flex gap-2 justify-end">
               <Button
                 variant="outline"
-                onClick={() => setPaymentDialogOpen(false)}>
+                onClick={() => {
+                  setEntryDialogOpen(false);
+                  resetEntryForm();
+                }}>
                 Cancel
               </Button>
-              <Button onClick={handleRecordPayment}>Record Payment</Button>
+              <Button onClick={handleAddLedgerEntry}>Save Entry</Button>
             </div>
           </div>
         </DialogContent>
       </Dialog>
 
-      {/* Old Ledger Entry Dialog */}
-      <Dialog open={historicalDialogOpen} onOpenChange={setHistoricalDialogOpen}>
+      {/* Create Ledger Dialog */}
+      <Dialog
+        open={createLedgerDialogOpen}
+        onOpenChange={(open) => {
+          setCreateLedgerDialogOpen(open);
+          if (!open) setCreateLedgerCustomerId("");
+        }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle className="font-heading">
-              Add Old Ledger Entry - {selectedCustomer?.name}
-            </DialogTitle>
+            <DialogTitle className="font-heading">Create Ledger</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              Use this to rebuild your customer ledger from old written books — opening balance,
-              old orders not entered as invoices, or old payments.
+              Optional: open a manual ledger for a customer when you do not want to
+              add invoices for them. They will still appear here automatically
+              once they have invoices or payments.
             </p>
             <div>
-              <Label>Entry type</Label>
+              <FormLabel required>Customer</FormLabel>
               <Select
-                value={historicalType}
-                onValueChange={(v) => setHistoricalType(v as "debit" | "credit")}
+                value={createLedgerCustomerId}
+                onValueChange={setCreateLedgerCustomerId}
               >
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select customer" />
+                </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="debit">Old balance / amount owed (Debit)</SelectItem>
-                  <SelectItem value="credit">Old payment received (Credit)</SelectItem>
+                  {customersWithoutLedger.map((customer) => (
+                    <SelectItem key={customer.id} value={customer.id}>
+                      {customer.name}
+                      {customer.phone ? ` (${customer.phone})` : ""}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
-            </div>
-            <div>
-              <Label>Amount ({cur})</Label>
-              <Input
-                type="number"
-                min="0"
-                placeholder="Enter amount"
-                value={historicalAmount}
-                onChange={(e) =>
-                  setHistoricalAmount(
-                    e.target.value === "" ? "" : Number(e.target.value),
-                  )
-                }
-              />
-            </div>
-            <div>
-              <Label>Date from old records</Label>
-              <Input
-                type="date"
-                max={formatDateInputValue()}
-                value={historicalDate}
-                onChange={(e) => setHistoricalDate(e.target.value)}
-              />
-            </div>
-            <div>
-              <Label>Description</Label>
-              <Input
-                placeholder={
-                  historicalType === "debit"
-                    ? "e.g. Opening balance March 2023"
-                    : "e.g. Cash received on 12 Jan 2022"
-                }
-                value={historicalNote}
-                onChange={(e) => setHistoricalNote(e.target.value)}
-              />
+              {customers.length === 0 && (
+                <p className="text-xs text-muted-foreground mt-2">
+                  No customers yet.{" "}
+                  <Link to="/customers" className="text-primary underline">
+                    Add a customer
+                  </Link>{" "}
+                  first.
+                </p>
+              )}
+              {customers.length > 0 && customersWithoutLedger.length === 0 && (
+                <p className="text-xs text-muted-foreground mt-2">
+                  Every customer already has a ledger.
+                </p>
+              )}
             </div>
             <div className="flex gap-2 justify-end">
-              <Button variant="outline" onClick={() => setHistoricalDialogOpen(false)}>
+              <Button
+                variant="outline"
+                onClick={() => setCreateLedgerDialogOpen(false)}
+              >
                 Cancel
               </Button>
-              <Button onClick={handleAddHistoricalEntry}>Save Old Entry</Button>
+              <Button
+                onClick={handleCreateLedger}
+                disabled={!createLedgerCustomerId || customersWithoutLedger.length === 0}
+              >
+                Create Ledger
+              </Button>
             </div>
           </div>
         </DialogContent>
@@ -904,7 +1023,7 @@ export default function Ledger() {
               )}
             </div>
             <div>
-              <Label>A/C Name (appears on ledger)</Label>
+              <FormLabel>A/C Name (appears on ledger)</FormLabel>
               <Input
                 placeholder="Enter account / customer name"
                 value={accountName}

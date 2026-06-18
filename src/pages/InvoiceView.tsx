@@ -5,10 +5,15 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { FormLabel } from '@/components/ui/FormLabel';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { SHOP_NAME } from '@/lib/shop';
 import { CURRENCY, formatMoney } from '@/lib/currency';
+import {
+  formatProductPriceSuffix,
+  formatLineItemQuantityWithUnit,
+  lineItemDisplayName,
+} from '@/lib/productTypes';
 import { getInvoiceDiscountAmount } from '@/lib/storage';
 import { getInvoiceCustomerName } from '@/lib/walkingCustomer';
 import { buildInvoiceReceiptHtml } from '@/lib/printing/invoiceReceipts';
@@ -207,22 +212,25 @@ export default function InvoiceView() {
               <thead>
                 <tr className="border-b">
                   <th className="text-left py-2 font-heading">Product</th>
-                  <th className="text-right py-2 font-heading">Price/L</th>
-                  <th className="text-right py-2 font-heading">Qty (L)</th>
+                  <th className="text-right py-2 font-heading">Rate</th>
+                  <th className="text-right py-2 font-heading">Qty</th>
                   <th className="text-right py-2 font-heading">Total</th>
                 </tr>
               </thead>
               <tbody>
                 {invoice.items.map((item, i) => (
                   <tr key={i} className="border-b border-dashed">
-                    <td className="py-2">{item.productName}</td>
+                    <td className="py-2">{lineItemDisplayName(item)}</td>
                     <td className="text-right py-2">
                       {formatMoney(item.appliedPrice || item.pricePerLiter)}
+                      <span className="text-xs text-muted-foreground ml-1">
+                        {formatProductPriceSuffix(item)}
+                      </span>
                       {item.appliedPrice && item.appliedPrice !== item.pricePerLiter && (
                         <span className="text-xs text-muted-foreground line-through ml-1">{formatMoney(item.pricePerLiter)}</span>
                       )}
                     </td>
-                    <td className="text-right py-2">{item.quantity}</td>
+                    <td className="text-right py-2">{formatLineItemQuantityWithUnit(item)}</td>
                     <td className="text-right py-2">{formatMoney(item.total)}</td>
                   </tr>
                 ))}
@@ -277,7 +285,7 @@ export default function InvoiceView() {
               Remaining: <strong className="text-destructive">{formatMoney(remaining)}</strong>
             </div>
             <div>
-              <Label>Amount ({cur})</Label>
+              <FormLabel required>Amount ({cur})</FormLabel>
               <Input type="number" min="0" value={payAmount} onChange={e => setPayAmount(e.target.value === '' ? '' : Number(e.target.value))} autoFocus />
             </div>
             <div className="flex gap-2 justify-end">

@@ -13,7 +13,6 @@ import {
   BookOpen,
   Truck,
   PackagePlus,
-  Tags,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import UserSidebarFooter from '@/components/layout/UserSidebarFooter';
@@ -23,7 +22,6 @@ import WeeklyBackupReminder from '@/components/backup/WeeklyBackupReminder';
 const navItems = [
   { title: 'Dashboard', path: '/', icon: LayoutDashboard },
   { title: 'Products', path: '/products', icon: Package },
-  { title: 'Categories', path: '/categories', icon: Tags },
   { title: 'Stock In', path: '/stock-in', icon: PackagePlus },
   { title: 'Suppliers', path: '/suppliers', icon: Truck },
   { title: 'Customers', path: '/customers', icon: Users },

@@ -2,9 +2,18 @@ import { z } from 'zod';
 
 export const productSchema = z.object({
   name: z.string().trim().min(2, 'Name must be at least 2 characters').max(50, 'Name must be less than 50 characters'),
+  productType: z.enum(['oil', 'carton']),
+  cartonSize: z.enum(['1 Liter', '0.75 Liter']).optional(),
   pricePerLiter: z.coerce.number().positive('Price must be positive').multipleOf(0.01, 'Max 2 decimal places'),
   stock: z.coerce.number().int('Stock must be a whole number').min(0, 'Stock cannot be negative'),
-  category: z.string().min(1, 'Category is required'),
+}).superRefine((data, ctx) => {
+  if (data.productType === 'carton' && !data.cartonSize) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Carton size is required',
+      path: ['cartonSize'],
+    });
+  }
 });
 
 export const customerSchema = z.object({
@@ -99,9 +108,3 @@ export type RegisterFormData = z.infer<typeof registerSchema>;
 export type ForgotPasswordFormData = z.infer<typeof forgotPasswordSchema>;
 export type ResetPasswordFormData = z.infer<typeof resetPasswordSchema>;
 export type ProfileFormData = z.infer<typeof profileSchema>;
-
-export const oilCategorySchema = z.object({
-  name: z.string().trim().min(2, 'Name must be at least 2 characters').max(50, 'Name must be less than 50 characters'),
-});
-
-export type OilCategoryFormData = z.infer<typeof oilCategorySchema>;

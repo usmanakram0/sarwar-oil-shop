@@ -18,7 +18,6 @@ import ResetPassword from "@/pages/ResetPassword";
 
 const Dashboard = lazy(() => import("@/pages/Dashboard"));
 const Products = lazy(() => import("@/pages/Products"));
-const Categories = lazy(() => import("@/pages/Categories"));
 const Customers = lazy(() => import("@/pages/Customers"));
 const Invoices = lazy(() => import("@/pages/Invoices"));
 const InvoiceCreate = lazy(() => import("@/pages/InvoiceCreate"));
@@ -58,7 +57,6 @@ const App = () => (
                 <Route element={<AppLayout />}>
                   <Route path="/" element={<LazyPage><Dashboard /></LazyPage>} />
                   <Route path="/products" element={<LazyPage><Products /></LazyPage>} />
-                  <Route path="/categories" element={<LazyPage><Categories /></LazyPage>} />
                   <Route path="/suppliers" element={<LazyPage><Suppliers /></LazyPage>} />
                   <Route path="/stock-in" element={<LazyPage><StockIn /></LazyPage>} />
                   <Route path="/stock-in/new" element={<LazyPage><StockInCreate /></LazyPage>} />

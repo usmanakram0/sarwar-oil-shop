@@ -3,8 +3,6 @@ export const queryKeys = {
   root: ['shop'] as const,
   products: ['shop', 'products'] as const,
   product: (id: string) => ['shop', 'products', id] as const,
-  categories: ['shop', 'categories'] as const,
-  categoryNames: ['shop', 'categories', 'names'] as const,
   customers: ['shop', 'customers'] as const,
   customer: (id: string) => ['shop', 'customers', id] as const,
   suppliers: ['shop', 'suppliers'] as const,
@@ -14,6 +12,7 @@ export const queryKeys = {
   payments: ['shop', 'payments'] as const,
   customerPayments: (customerId: string) => ['shop', 'payments', 'customer', customerId] as const,
   customerBalance: (customerId: string) => ['shop', 'ledger', 'balance', customerId] as const,
+  customerLedgers: ['shop', 'customerLedgers'] as const,
   customerInvoices: (customerId: string) => ['shop', 'invoices', 'customer', customerId] as const,
   stockPurchases: ['shop', 'stockPurchases'] as const,
   stockPurchase: (id: string) => ['shop', 'stockPurchases', id] as const,
@@ -24,7 +23,6 @@ export const queryKeys = {
 
 export type ShopStorageKey =
   | 'products'
-  | 'categories'
   | 'customers'
   | 'suppliers'
   | 'invoices'

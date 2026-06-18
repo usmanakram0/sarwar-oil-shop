@@ -21,8 +21,10 @@ import {
 } from "@/lib/storage";
 import { formatMoney, formatMoneyWhole } from "@/lib/currency";
 import { isLowStockAlert } from "@/lib/inventory";
+import { formatStockShort } from "@/lib/productTypes";
 import { format, isToday, isThisWeek, isThisMonth } from "date-fns";
 import { isActiveSale } from "@/lib/invoiceLifecycle";
+import TodaySalesBreakdown from "@/components/dashboard/TodaySalesBreakdown";
 
 export default function Dashboard() {
   const settings = settingsStorage.get();
@@ -44,7 +46,7 @@ export default function Dashboard() {
         (i) => isThisMonth(new Date(i.createdAt)) && isActiveSale(i),
       )
       .reduce((sum, i) => sum + i.total, 0);
-    const lowStockProducts = products.filter((p) => isLowStockAlert(p.stock));
+    const lowStockProducts = products.filter((p) => isLowStockAlert(p));
     const pendingInvoices = invoices.filter(
       (i) => i.status === "pending" || i.status === "partial",
     );
@@ -151,6 +153,8 @@ export default function Dashboard() {
         </Card>
       </div>
 
+      <TodaySalesBreakdown invoices={invoices} />
+
       {/* Quick Stats */}
       <div className="grid grid-cols-3 gap-3">
         <Card className="bg-gradient-to-br from-primary/5 to-transparent">
@@ -253,14 +257,11 @@ export default function Dashboard() {
                       className="flex items-center justify-between p-3 rounded-lg bg-destructive/5">
                       <div>
                         <p className="text-sm font-medium">{p.name}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {p.category}
-                        </p>
                       </div>
                       <Badge
                         variant="outline"
                         className="border-destructive text-destructive">
-                        {p.stock}L
+                        {formatStockShort(p)}
                       </Badge>
                     </div>
                   ))}

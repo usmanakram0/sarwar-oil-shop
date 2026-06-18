@@ -1,7 +1,7 @@
 import { useMutation } from '@tanstack/react-query';
 import {
-  categoryStorage,
   customerStorage,
+  customerLedgerStorage,
   invoiceStorage,
   paymentStorage,
   productStorage,
@@ -9,8 +9,8 @@ import {
   stockPurchaseStorage,
   supplierStorage,
   type Customer,
+  type CustomerLedger,
   type Invoice,
-  type OilCategory,
   type Payment,
   type Product,
   type ShopSettings,
@@ -263,103 +263,6 @@ export function useSupplierMutations() {
     onMutate: async id => {
       const ctx = await beginOptimisticUpdate([queryKeys.suppliers]);
       removeListItem(queryKeys.suppliers, id);
-      return ctx;
-    },
-    onError: (_e, _v, ctx) => rollbackOptimisticUpdate(ctx),
-  });
-
-  return { add, update, remove };
-}
-
-export function useCategoryMutations() {
-  const add = useMutation({
-    mutationFn: (name: string) => {
-      const result = categoryStorage.add(name);
-      if (!result.success) throw new Error(result.message);
-      return result;
-    },
-    onMutate: async name => {
-      const ctx = await beginOptimisticUpdate([
-        queryKeys.categories,
-        queryKeys.categoryNames,
-      ]);
-      appendListItem(queryKeys.categories, {
-        id: tempId(),
-        name,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      } satisfies OilCategory);
-      queryClient.setQueryData<string[]>(queryKeys.categoryNames, old => [
-        ...(old ?? []),
-        name,
-      ]);
-      return ctx;
-    },
-    onError: (_e, _v, ctx) => rollbackOptimisticUpdate(ctx),
-  });
-
-  const update = useMutation({
-    mutationFn: ({ id, name }: { id: string; name: string }) => {
-      const result = categoryStorage.update(id, name);
-      if (!result.success) throw new Error(result.message);
-      return result;
-    },
-    onMutate: async ({ id, name }) => {
-      const ctx = await beginOptimisticUpdate([
-        queryKeys.categories,
-        queryKeys.categoryNames,
-        queryKeys.products,
-      ]);
-      const categories = queryClient.getQueryData<OilCategory[]>(queryKeys.categories) ?? [];
-      const oldCategory = categories.find(c => c.id === id);
-      updateListItem<OilCategory>(queryKeys.categories, id, c => ({
-        ...c,
-        name,
-        updatedAt: new Date().toISOString(),
-      }));
-      if (oldCategory) {
-        queryClient.setQueryData<string[]>(queryKeys.categoryNames, old =>
-          (old ?? []).map(n => (n === oldCategory.name ? name : n))
-        );
-        queryClient.setQueryData<Product[]>(queryKeys.products, old =>
-          (old ?? []).map(p =>
-            p.category === oldCategory.name
-              ? { ...p, category: name, updatedAt: new Date().toISOString() }
-              : p
-          )
-        );
-      }
-      return ctx;
-    },
-    onError: (_e, _v, ctx) => rollbackOptimisticUpdate(ctx),
-  });
-
-  const remove = useMutation({
-    mutationFn: ({
-      id,
-      reassignToId,
-    }: {
-      id: string;
-      reassignToId?: string;
-    }) => {
-      const result = categoryStorage.delete(id, reassignToId);
-      if (!result.success) throw new Error(result.message);
-      return result;
-    },
-    onMutate: async ({ id }) => {
-      const ctx = await beginOptimisticUpdate([
-        queryKeys.categories,
-        queryKeys.categoryNames,
-        queryKeys.products,
-      ]);
-      const categories = queryClient.getQueryData<OilCategory[]>(queryKeys.categories) ?? [];
-      const removed = categories.find(c => c.id === id);
-      removeListItem<OilCategory>(queryKeys.categories, id);
-      if (removed) {
-        queryClient.setQueryData<string[]>(queryKeys.categoryNames, old =>
-          (old ?? []).filter(n => n !== removed.name)
-        );
-      }
       return ctx;
     },
     onError: (_e, _v, ctx) => rollbackOptimisticUpdate(ctx),
@@ -710,7 +613,94 @@ export function usePaymentMutations() {
     onError: (_e, _v, ctx) => rollbackOptimisticUpdate(ctx),
   });
 
-  return { addManualPayment, addHistoricalLedgerEntry };
+  const addLedgerEntry = useMutation({
+    mutationFn: ({
+      customerId,
+      customerName,
+      amount,
+      type,
+      note,
+      options,
+    }: {
+      customerId: string;
+      customerName: string;
+      amount: number;
+      type: 'debit' | 'credit';
+      note: string;
+      options?: { orderDate?: string; applyToInvoices?: boolean };
+    }) =>
+      paymentStorage.addLedgerEntry(
+        customerId,
+        customerName,
+        amount,
+        type,
+        note,
+        options,
+      ),
+    onMutate: async ({ customerId, customerName, amount, type, note, options }) => {
+      const ctx = await beginOptimisticUpdate([
+        queryKeys.payments,
+        queryKeys.customerPayments(customerId),
+        queryKeys.customerBalance(customerId),
+        queryKeys.customerLedgers,
+        queryKeys.invoices,
+        queryKeys.dashboard,
+      ]);
+      const defaultNote =
+        type === 'debit'
+          ? 'Pending amount owed'
+          : note || 'Manual payment';
+      appendPaymentToCaches(
+        {
+          id: tempId(),
+          customerId,
+          customerName,
+          amount,
+          type,
+          note: note.trim() || defaultNote,
+          createdAt: resolveOrderTimestamp(options?.orderDate),
+        },
+        customerId,
+      );
+      return ctx;
+    },
+    onError: (_e, _v, ctx) => rollbackOptimisticUpdate(ctx),
+  });
+
+  return { addManualPayment, addHistoricalLedgerEntry, addLedgerEntry };
+}
+
+export function useCustomerLedgerMutations() {
+  const create = useMutation({
+    mutationFn: ({
+      customerId,
+      customerName,
+    }: {
+      customerId: string;
+      customerName: string;
+    }) => {
+      const ledger = customerLedgerStorage.create(customerId, customerName);
+      if (!ledger) throw new Error('Ledger already exists for this customer');
+      return ledger;
+    },
+    onMutate: async ({ customerId, customerName }) => {
+      const ctx = await beginOptimisticUpdate([queryKeys.customerLedgers]);
+      const now = new Date().toISOString();
+      appendListItem(queryKeys.customerLedgers, {
+        id: tempId(),
+        customerId,
+        customerName,
+        createdAt: now,
+        updatedAt: now,
+      } satisfies CustomerLedger);
+      return ctx;
+    },
+    onSuccess: (created) =>
+      replaceOptimisticItem(queryKeys.customerLedgers, created),
+    onError: (_e, _v, ctx) => rollbackOptimisticUpdate(ctx),
+  });
+
+  return { create };
 }
 
 export function useSettingsMutation() {

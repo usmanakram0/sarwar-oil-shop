@@ -4,13 +4,23 @@ import { Plus, Trash2, ArrowLeft, Pencil } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { FormLabel } from '@/components/ui/FormLabel';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import HistoricalEntryFields from '@/components/forms/HistoricalEntryFields';
 import CustomerSearchCombobox from '@/components/forms/CustomerSearchCombobox';
 import { type InvoiceItem } from '@/lib/storage';
 import { CURRENCY, formatMoney } from '@/lib/currency';
+import {
+  filterProductsByType,
+  formatLineItemPriceLabel,
+  formatQuantityUnit,
+  formatStockShort,
+  isCartonProduct,
+  normalizeProductType,
+  productDisplayName,
+  type ProductType,
+} from '@/lib/productTypes';
 import { WALKING_CUSTOMER_NAME } from '@/lib/walkingCustomer';
 import {
   useCustomerBalanceQuery,
@@ -72,8 +82,19 @@ export default function InvoiceCreate() {
     return total;
   }, [total, customerBalance]);
 
-  const addItem = () => {
-    setItems([...items, { productId: '', productName: '', pricePerLiter: 0, appliedPrice: 0, quantity: 1, total: 0 }]);
+  const addItem = (productType: ProductType = 'oil') => {
+    setItems([
+      ...items,
+      {
+        productId: '',
+        productName: '',
+        productType,
+        pricePerLiter: 0,
+        appliedPrice: 0,
+        quantity: 1,
+        total: 0,
+      },
+    ]);
   };
 
   const updateItem = (index: number, field: string, value: string | number) => {
@@ -85,6 +106,8 @@ export default function InvoiceCreate() {
       if (product) {
         item.productId = product.id;
         item.productName = product.name;
+        item.productType = normalizeProductType(product.productType);
+        item.cartonSize = product.cartonSize;
         item.pricePerLiter = product.pricePerLiter;
         item.appliedPrice = product.pricePerLiter;
         item.total = item.quantity * product.pricePerLiter;
@@ -120,7 +143,10 @@ export default function InvoiceCreate() {
       for (const item of items) {
         const product = products.find(p => p.id === item.productId);
         if (product && item.quantity > product.stock) {
-          toast.error(`Insufficient stock for ${product.name}. Available: ${product.stock}L`);
+          const unit = isCartonProduct(product) ? 'cartons' : 'L';
+          toast.error(
+            `Insufficient stock for ${product.name}. Available: ${product.stock} ${unit}`,
+          );
           return;
         }
       }
@@ -241,20 +267,38 @@ export default function InvoiceCreate() {
 
       {/* Items */}
       <Card className="border-l-4 border-l-accent">
-        <CardHeader className="pb-3 flex flex-row items-center justify-between">
+        <CardHeader className="pb-3 flex flex-row items-center justify-between gap-2 flex-wrap">
           <CardTitle className="text-sm font-heading">Products</CardTitle>
-          <Button size="sm" variant="outline" onClick={addItem}><Plus className="w-4 h-4 mr-1" />Add</Button>
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" onClick={() => addItem('oil')}>
+              <Plus className="w-4 h-4 mr-1" />Add oil
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => addItem('carton')}>
+              <Plus className="w-4 h-4 mr-1" />Add carton
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="space-y-3">
           {items.length === 0 && <p className="text-sm text-muted-foreground text-center py-6">No products added yet</p>}
-          {items.map((item, index) => (
+          {items.map((item, index) => {
+            const lineType = normalizeProductType(item.productType);
+            const lineProducts = filterProductsByType(products, lineType);
+            const isCartonLine = lineType === 'carton';
+            return (
             <div key={index} className="p-3 rounded-lg bg-muted/30 border border-border/50 space-y-2">
-              <div className="flex gap-2">
+              <div className="flex gap-2 items-center">
+                <span className="text-xs font-medium text-muted-foreground px-2 py-1 rounded bg-background border">
+                  {isCartonLine ? 'Carton' : 'Oil'}
+                </span>
                 <div className="flex-1">
                   <Select value={item.productId} onValueChange={v => updateItem(index, 'productId', v)}>
-                    <SelectTrigger><SelectValue placeholder="Select product" /></SelectTrigger>
+                    <SelectTrigger><SelectValue placeholder={`Select ${isCartonLine ? 'carton' : 'oil'}`} /></SelectTrigger>
                     <SelectContent>
-                      {products.map(p => <SelectItem key={p.id} value={p.id}>{p.name} ({p.stock}L)</SelectItem>)}
+                      {lineProducts.map(p => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {productDisplayName(p)} ({formatStockShort(p)})
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
@@ -264,7 +308,9 @@ export default function InvoiceCreate() {
               </div>
               <div className="flex gap-2 items-end">
                 <div className="flex-1">
-                  <Label className="text-xs text-muted-foreground">Price/{cur}</Label>
+                  <FormLabel className="text-xs text-muted-foreground" required>
+                    {formatLineItemPriceLabel(lineType)} ({CURRENCY})
+                  </FormLabel>
                   <div className="relative">
                     <Input
                       type="number"
@@ -280,17 +326,20 @@ export default function InvoiceCreate() {
                     )}
                   </div>
                 </div>
-                <div className="w-20">
-                  <Label className="text-xs text-muted-foreground">Qty (L)</Label>
-                  <Input type="number" min="1" value={item.quantity || ''} onChange={e => updateItem(index, 'quantity', e.target.value)} />
+                <div className="w-24">
+                  <FormLabel className="text-xs text-muted-foreground" required>
+                    Qty ({formatQuantityUnit(lineType)})
+                  </FormLabel>
+                  <Input type="number" min="1" step={isCartonLine ? '1' : '0.01'} value={item.quantity || ''} onChange={e => updateItem(index, 'quantity', e.target.value)} />
                 </div>
                 <div className="w-28 text-right">
-                  <Label className="text-xs text-muted-foreground">Total</Label>
+                  <FormLabel className="text-xs text-muted-foreground">Total</FormLabel>
                   <p className="text-sm font-heading font-bold py-2">{formatMoney(item.total)}</p>
                 </div>
               </div>
             </div>
-          ))}
+          );
+          })}
         </CardContent>
       </Card>
 
@@ -299,7 +348,7 @@ export default function InvoiceCreate() {
         <CardContent className="pt-5 space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <Label>Discount ({cur})</Label>
+              <FormLabel>Discount ({cur})</FormLabel>
               <Input
                 type="number"
                 min="0"
@@ -316,7 +365,7 @@ export default function InvoiceCreate() {
               </p>
             </div>
             <div>
-              <Label>Payment Method</Label>
+              <FormLabel required>Payment Method</FormLabel>
               <Select value={paymentMethod} onValueChange={v => setPaymentMethod(v as 'cash' | 'card' | 'credit')}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -329,7 +378,7 @@ export default function InvoiceCreate() {
           </div>
 
           <div>
-            <Label>Amount Paid Now ({cur})</Label>
+            <FormLabel>Amount Paid Now ({cur})</FormLabel>
             <Input
               type="number"
               min="0"

@@ -5,14 +5,16 @@ import { Plus, Search, Pencil, Trash2, Truck } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { FormLabel } from '@/components/ui/FormLabel';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { supplierSchema, type SupplierFormData } from '@/lib/validation';
 import { useStockPurchasesQuery, useSuppliersList } from '@/hooks/useShopData';
 import { useSupplierMutations } from '@/hooks/useShopMutations';
 import { toast } from 'sonner';
 import ConfirmDeleteDialog from '@/components/ConfirmDeleteDialog';
+import ListPagination from '@/components/ui/ListPagination';
 import type { Supplier } from '@/lib/storage';
+import { usePagination } from '@/hooks/usePagination';
 
 export default function Suppliers() {
   const { suppliers } = useSuppliersList();
@@ -36,6 +38,16 @@ export default function Suppliers() {
     ),
     [suppliers, search]
   );
+
+  const {
+    paginatedItems: paginatedSuppliers,
+    page,
+    setPage,
+    pageSize,
+    setPageSize,
+    totalItems,
+    totalPages,
+  } = usePagination(filtered, [search]);
 
   const openAdd = () => {
     setEditing(null);
@@ -118,7 +130,7 @@ export default function Suppliers() {
         <Card><CardContent className="py-12 text-center text-muted-foreground">No suppliers found</CardContent></Card>
       ) : (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filtered.map(s => (
+          {paginatedSuppliers.map(s => (
             <Card key={s.id} className="group">
               <CardContent className="pt-5">
                 <div className="flex items-start justify-between mb-2">
@@ -144,6 +156,18 @@ export default function Suppliers() {
         </div>
       )}
 
+      {filtered.length > 0 && (
+        <ListPagination
+          page={page}
+          totalPages={totalPages}
+          totalItems={totalItems}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={setPageSize}
+          className="border-t-0 pt-0"
+        />
+      )}
+
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>
           <DialogHeader>
@@ -151,16 +175,16 @@ export default function Suppliers() {
           </DialogHeader>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             <div>
-              <Label>Name *</Label>
+              <FormLabel required>Name</FormLabel>
               <Input {...form.register('name')} />
               {form.formState.errors.name && <p className="text-xs text-destructive mt-1">{form.formState.errors.name.message}</p>}
             </div>
             <div>
-              <Label>Phone</Label>
+              <FormLabel>Phone</FormLabel>
               <Input {...form.register('phone')} />
             </div>
             <div>
-              <Label>Address</Label>
+              <FormLabel>Address</FormLabel>
               <Input {...form.register('address')} />
             </div>
             <div className="flex gap-2 justify-end">

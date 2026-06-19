@@ -16,7 +16,6 @@ import {
   formatLineItemPriceLabel,
   formatQuantityUnit,
   formatStockShort,
-  isCartonProduct,
   normalizeProductType,
   productDisplayName,
   type ProductType,
@@ -29,6 +28,7 @@ import {
 } from '@/hooks/useShopData';
 import { useInvoiceMutations } from '@/hooks/useShopMutations';
 import { formatDateInputValue, validateOrderDate } from '@/lib/historicalEntry';
+import { validateStockOut } from '@/lib/stockMovement';
 import { toast } from 'sonner';
 
 export default function InvoiceCreate() {
@@ -71,16 +71,12 @@ export default function InvoiceCreate() {
     setDiscount(Math.min(parsed, subtotal));
   };
 
-  // If customer has advance balance (negative = advance), deduct from total
-  const effectiveTotal = useMemo(() => {
-    if (!customerBalance) return total;
-    // balance > 0 means customer owes, balance < 0 means advance
-    if (customerBalance.balance < 0) {
-      const advance = Math.abs(customerBalance.balance);
-      return Math.max(0, total - advance);
-    }
-    return total;
-  }, [total, customerBalance]);
+  const advanceApplied = useMemo(() => {
+    if (!customerBalance || customerBalance.balance >= 0) return 0;
+    return Math.min(Math.abs(customerBalance.balance), total);
+  }, [customerBalance, total]);
+
+  const amountDue = useMemo(() => Math.max(0, total - advanceApplied), [total, advanceApplied]);
 
   const addItem = (productType: ProductType = 'oil') => {
     setItems([
@@ -140,15 +136,19 @@ export default function InvoiceCreate() {
     }
 
     if (!isHistorical) {
-      for (const item of items) {
-        const product = products.find(p => p.id === item.productId);
-        if (product && item.quantity > product.stock) {
-          const unit = isCartonProduct(product) ? 'cartons' : 'L';
-          toast.error(
-            `Insufficient stock for ${product.name}. Available: ${product.stock} ${unit}`,
-          );
-          return;
-        }
+      try {
+        validateStockOut(
+          products,
+          items.map((item) => ({
+            productId: item.productId,
+            quantity: item.quantity,
+          })),
+        );
+      } catch (error) {
+        toast.error(
+          error instanceof Error ? error.message : 'Insufficient stock',
+        );
+        return;
       }
     }
 
@@ -159,10 +159,12 @@ export default function InvoiceCreate() {
 
     const paid = Number(paidAmount) || 0;
     const customer = customerId ? customers.find(c => c.id === customerId) : null;
+    const totalPaid = advanceApplied + paid;
+    const remaining = Math.max(0, total - totalPaid);
 
     let status: 'paid' | 'pending' | 'partial' = 'pending';
-    if (paid >= total) status = 'paid';
-    else if (paid > 0) status = 'partial';
+    if (remaining <= 0) status = 'paid';
+    else if (totalPaid > 0) status = 'partial';
 
     createInvoice.mutate(
       {
@@ -175,7 +177,7 @@ export default function InvoiceCreate() {
           tax: 0,
           total,
           paidAmount: paid,
-          remainingAmount: Math.max(0, total - paid),
+          remainingAmount: remaining,
           paymentMethod,
           status,
         },
@@ -192,7 +194,10 @@ export default function InvoiceCreate() {
           toast.success(isHistorical ? 'Old order recorded!' : 'Invoice created!');
           navigate('/invoices');
         },
-        onError: () => toast.error('Could not save invoice'),
+        onError: (error) =>
+          toast.error(
+            error instanceof Error ? error.message : 'Could not save invoice',
+          ),
       }
     );
   };
@@ -382,7 +387,7 @@ export default function InvoiceCreate() {
             <Input
               type="number"
               min="0"
-              placeholder={`Total: ${formatMoney(total)}`}
+              placeholder={`Due: ${formatMoney(amountDue)}`}
               value={paidAmount}
               onChange={e => setPaidAmount(e.target.value === '' ? '' : Number(e.target.value))}
             />
@@ -394,17 +399,38 @@ export default function InvoiceCreate() {
           <div className="border-t pt-4 space-y-1">
             <div className="flex justify-between text-sm"><span className="text-muted-foreground">Subtotal</span><span>{formatMoney(subtotal)}</span></div>
             {discount > 0 && <div className="flex justify-between text-sm"><span className="text-muted-foreground">Discount</span><span>-{formatMoney(discount)}</span></div>}
-            <div className="flex justify-between text-lg font-heading font-bold pt-2 border-t">
-              <span>Total</span><span className="text-primary">{formatMoney(total)}</span>
-            </div>
-            {(Number(paidAmount) || 0) > 0 && (Number(paidAmount) || 0) < total && (
-              <div className="flex justify-between text-sm text-destructive font-medium">
-                <span>Remaining</span><span>{formatMoney(total - (Number(paidAmount) || 0))}</span>
+            {advanceApplied > 0 && (
+              <div className="flex justify-between text-sm text-success font-medium">
+                <span>Advance applied</span>
+                <span>-{formatMoney(advanceApplied)}</span>
               </div>
             )}
-            {(Number(paidAmount) || 0) > total && (
+            <div className="flex justify-between text-lg font-heading font-bold pt-2 border-t">
+              <span>{advanceApplied > 0 ? 'Amount due' : 'Total'}</span>
+              <span className="text-primary">{formatMoney(amountDue)}</span>
+            </div>
+            {advanceApplied > 0 && (
+              <div className="flex justify-between text-xs text-muted-foreground">
+                <span>Bill total</span>
+                <span>{formatMoney(total)}</span>
+              </div>
+            )}
+            {(Number(paidAmount) || 0) > 0 && (Number(paidAmount) || 0) < amountDue && (
+              <div className="flex justify-between text-sm text-destructive font-medium">
+                <span>Remaining</span>
+                <span>{formatMoney(amountDue - (Number(paidAmount) || 0))}</span>
+              </div>
+            )}
+            {(Number(paidAmount) || 0) > amountDue && amountDue > 0 && (
               <div className="flex justify-between text-sm text-success font-medium">
-                <span>Advance</span><span>{formatMoney((Number(paidAmount) || 0) - total)}</span>
+                <span>Advance</span>
+                <span>{formatMoney((Number(paidAmount) || 0) - amountDue)}</span>
+              </div>
+            )}
+            {amountDue === 0 && (Number(paidAmount) || 0) > 0 && (
+              <div className="flex justify-between text-sm text-success font-medium">
+                <span>Advance</span>
+                <span>{formatMoney(Number(paidAmount) || 0)}</span>
               </div>
             )}
           </div>

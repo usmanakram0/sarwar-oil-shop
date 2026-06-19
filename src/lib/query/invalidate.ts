@@ -14,6 +14,7 @@ const STORAGE_KEY_TO_SCOPE: Record<ShopStorageKey, InvalidationScope[]> = {
   suppliers: ['suppliers', 'stockPurchases', 'supplierPayments'],
   invoices: ['invoices', 'payments', 'products', 'dashboard', 'ledger'],
   payments: ['payments', 'invoices', 'dashboard', 'ledger'],
+  customerLedgers: ['customerLedgers', 'ledger'],
   stockPurchases: ['stockPurchases', 'products', 'supplierPayments', 'dashboard'],
   supplierPayments: ['supplierPayments', 'stockPurchases', 'dashboard'],
 };
@@ -24,6 +25,7 @@ const SCOPE_TO_QUERY_KEYS: Record<InvalidationScope, readonly (readonly unknown[
   suppliers: [queryKeys.suppliers],
   invoices: [queryKeys.invoices, queryKeys.dashboard],
   payments: [queryKeys.payments, queryKeys.dashboard, queryKeys.root],
+  customerLedgers: [queryKeys.customerLedgers, queryKeys.root],
   stockPurchases: [queryKeys.stockPurchases, queryKeys.dashboard],
   supplierPayments: [queryKeys.supplierPayments],
   settings: [queryKeys.settings],

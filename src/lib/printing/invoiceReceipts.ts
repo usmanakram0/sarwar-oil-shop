@@ -81,7 +81,7 @@ export function buildBillReceiptBody(context: InvoiceReceiptContext): string {
     ...(discountAmount > 0
       ? [{ label: 'Discount:', value: `-${formatMoney(discountAmount, 0)}` }]
       : []),
-    { label: 'Total:', value: formatMoney(invoice.total, 0) },
+    { label: 'Total:', value: formatMoney(invoice.total, 0), emphasize: true },
     { label: 'Received:', value: formatMoney(invoice.paidAmount || 0, 0) },
     { label: 'Pending:', value: formatMoney(remaining, 0) },
   ]);

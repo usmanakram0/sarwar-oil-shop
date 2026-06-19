@@ -38,15 +38,20 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { paymentStorage } from '@/lib/storage';
-import { SHOP_NAME } from '@/lib/shop';
-import { CURRENCY, formatMoney, formatMoneyWhole, formatMoneyWithSign } from '@/lib/currency';
-import { formatDateInputValue, validateOrderDate } from '@/lib/historicalEntry';
+import { paymentStorage } from "@/lib/storage";
+import { SHOP_NAME } from "@/lib/shop";
+import {
+  CURRENCY,
+  formatMoney,
+  formatMoneyWhole,
+  formatMoneyWithSign,
+} from "@/lib/currency";
+import { formatDateInputValue, validateOrderDate } from "@/lib/historicalEntry";
 import {
   buildLedgerCustomerList,
   filterLedgerCustomers,
-} from '@/lib/ledgerCustomers';
-import { isWalkingCustomer } from '@/lib/walkingCustomer';
+} from "@/lib/ledgerCustomers";
+import { isWalkingCustomer } from "@/lib/walkingCustomer";
 import {
   useCustomerBalanceQuery,
   useCustomerInvoicesQuery,
@@ -56,17 +61,15 @@ import {
   useInvoicesList,
   usePaymentsQuery,
   useSettingsQuery,
-} from '@/hooks/useShopData';
-import { useCustomerLedgerMutations, usePaymentMutations } from '@/hooks/useShopMutations';
-import { usePagination } from '@/hooks/usePagination';
-import ListPagination from '@/components/ui/ListPagination';
-import { safeArray, safeString } from '@/lib/query/safe';
+} from "@/hooks/useShopData";
 import {
-  format,
-  parseISO,
-  startOfDay,
-  endOfDay,
-} from "date-fns";
+  useCustomerLedgerMutations,
+  usePaymentMutations,
+} from "@/hooks/useShopMutations";
+import { usePagination } from "@/hooks/usePagination";
+import ListPagination from "@/components/ui/ListPagination";
+import { safeArray, safeString } from "@/lib/query/safe";
+import { format, parseISO, startOfDay, endOfDay } from "date-fns";
 import { toast } from "sonner";
 
 export default function Ledger() {
@@ -93,15 +96,17 @@ export default function Ledger() {
   const [entryDate, setEntryDate] = useState(formatDateInputValue());
 
   const { data: balanceData } = useCustomerBalanceQuery(selectedCustomerId);
-  const { data: customerPayments = [] } = useCustomerPaymentsQuery(selectedCustomerId);
-  const { data: customerInvoices = [] } = useCustomerInvoicesQuery(selectedCustomerId);
+  const { data: customerPayments = [] } =
+    useCustomerPaymentsQuery(selectedCustomerId);
+  const { data: customerInvoices = [] } =
+    useCustomerInvoicesQuery(selectedCustomerId);
 
   const selectedCustomer = useMemo(
     () => customers.find((c) => c.id === selectedCustomerId),
     [customers, selectedCustomerId],
   );
 
-  const balance = selectedCustomerId ? balanceData ?? null : null;
+  const balance = selectedCustomerId ? (balanceData ?? null) : null;
 
   const ledgerEntries = useMemo(() => {
     if (!selectedCustomerId) return [];
@@ -159,9 +164,7 @@ export default function Ledger() {
   );
 
   const customersWithoutLedger = useMemo(() => {
-    const visibleIds = new Set(
-      allLedgerCustomers.map((row) => row.customerId),
-    );
+    const visibleIds = new Set(allLedgerCustomers.map((row) => row.customerId));
     return customers.filter(
       (customer) =>
         !isWalkingCustomer(customer.id) && !visibleIds.has(customer.id),
@@ -259,8 +262,7 @@ export default function Ledger() {
       },
       {
         onSuccess: () => {
-          const label =
-            entryType === "debit" ? "Pending amount" : "Payment";
+          const label = entryType === "debit" ? "Pending amount" : "Payment";
           toast.success(
             `${label} of ${formatMoney(Number(entryAmount))} recorded`,
           );
@@ -410,8 +412,8 @@ export default function Ledger() {
         <div className="space-y-4">
           <Card className="border-dashed border-amber-400/50 bg-amber-50/30 dark:bg-amber-950/20">
             <CardContent className="pt-4 pb-4 text-sm text-muted-foreground">
-              Customers with invoices or payments appear here automatically.
-              Use <strong>Create Ledger</strong> only when you want to track a
+              Customers with invoices or payments appear here automatically. Use{" "}
+              <strong>Create Ledger</strong> only when you want to track a
               customer manually without adding invoices. Use{" "}
               <strong>Add Ledger Entry</strong> for pending amounts or payments.
             </CardContent>
@@ -438,7 +440,9 @@ export default function Ledger() {
                   <CardContent className="pt-4 pb-4">
                     <div className="flex items-center justify-between">
                       <div>
-                        <p className="font-heading font-semibold">{displayName}</p>
+                        <p className="font-heading font-semibold">
+                          {displayName}
+                        </p>
                         {customer?.phone && (
                           <p className="text-xs text-muted-foreground">
                             {customer.phone}
@@ -531,11 +535,7 @@ export default function Ledger() {
                     <Wallet className="w-4 h-4 mr-1" />
                     Add Ledger Entry
                   </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    asChild
-                  >
+                  <Button size="sm" variant="outline" asChild>
                     <Link to="/invoices/new" state={{ historical: true }}>
                       Add Old Order
                     </Link>
@@ -664,7 +664,8 @@ export default function Ledger() {
             <CardContent className="p-0">
               {ledgerEntries.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-8">
-                  No transactions yet. Use Add Ledger Entry to record pending amounts or payments.
+                  No transactions yet. Use Add Ledger Entry to record pending
+                  amounts or payments.
                 </p>
               ) : (
                 <>
@@ -767,7 +768,9 @@ export default function Ledger() {
                                 {inv.invoiceNumber}
                               </Link>
                               {inv.historical && (
-                                <Badge variant="outline" className="text-[10px] border-amber-500 text-amber-700 dark:text-amber-300">
+                                <Badge
+                                  variant="outline"
+                                  className="text-[10px] border-amber-500 text-amber-700 dark:text-amber-300">
                                   Old
                                 </Badge>
                               )}
@@ -785,7 +788,10 @@ export default function Ledger() {
                           <TableCell className="text-right text-sm text-destructive">
                             {(inv.remainingAmount ||
                               inv.total - (inv.paidAmount || 0)) > 0
-                              ? formatMoney(inv.remainingAmount || inv.total - (inv.paidAmount || 0))
+                              ? formatMoney(
+                                  inv.remainingAmount ||
+                                    inv.total - (inv.paidAmount || 0),
+                                )
                               : "-"}
                           </TableCell>
                           <TableCell>
@@ -848,12 +854,15 @@ export default function Ledger() {
               <FormLabel required>Entry type</FormLabel>
               <Select
                 value={entryType}
-                onValueChange={(v) => setEntryType(v as "debit" | "credit")}
-              >
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                onValueChange={(v) => setEntryType(v as "debit" | "credit")}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="credit">Payment received (Credit)</SelectItem>
-                  <SelectItem value="debit">Pending amount owed (Debit)</SelectItem>
+                  <SelectItem value="credit">
+                    Receive Amount (Credit)
+                  </SelectItem>
+                  <SelectItem value="debit">Pending Amount (Debit)</SelectItem>
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground mt-1">
@@ -903,7 +912,9 @@ export default function Ledger() {
                 </Label>
                 {useOldDate && (
                   <div>
-                    <FormLabel className="text-xs" required>Entry date</FormLabel>
+                    <FormLabel className="text-xs" required>
+                      Entry date
+                    </FormLabel>
                     <Input
                       type="date"
                       max={formatDateInputValue()}
@@ -942,16 +953,15 @@ export default function Ledger() {
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              Optional: open a manual ledger for a customer when you do not want to
-              add invoices for them. They will still appear here automatically
-              once they have invoices or payments.
+              Optional: open a manual ledger for a customer when you do not want
+              to add invoices for them. They will still appear here
+              automatically once they have invoices or payments.
             </p>
             <div>
               <FormLabel required>Customer</FormLabel>
               <Select
                 value={createLedgerCustomerId}
-                onValueChange={setCreateLedgerCustomerId}
-              >
+                onValueChange={setCreateLedgerCustomerId}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select customer" />
                 </SelectTrigger>
@@ -982,14 +992,14 @@ export default function Ledger() {
             <div className="flex gap-2 justify-end">
               <Button
                 variant="outline"
-                onClick={() => setCreateLedgerDialogOpen(false)}
-              >
+                onClick={() => setCreateLedgerDialogOpen(false)}>
                 Cancel
               </Button>
               <Button
                 onClick={handleCreateLedger}
-                disabled={!createLedgerCustomerId || customersWithoutLedger.length === 0}
-              >
+                disabled={
+                  !createLedgerCustomerId || customersWithoutLedger.length === 0
+                }>
                 Create Ledger
               </Button>
             </div>
@@ -1054,4 +1064,3 @@ export default function Ledger() {
     </div>
   );
 }
-

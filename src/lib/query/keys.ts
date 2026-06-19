@@ -27,5 +27,6 @@ export type ShopStorageKey =
   | 'suppliers'
   | 'invoices'
   | 'payments'
+  | 'customerLedgers'
   | 'stockPurchases'
   | 'supplierPayments';

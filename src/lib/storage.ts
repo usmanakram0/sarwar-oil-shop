@@ -2,6 +2,16 @@
 import { getCurrentTenantId } from '@/lib/auth';
 import { markTenantDataDirty } from '@/lib/offline/syncMeta';
 import {
+  flushTenantAutosave,
+  scheduleTenantAutosave,
+  type TenantAutosavePayload,
+} from '@/lib/persistence/tenantAutosave';
+import {
+  LocalStorageQuotaError,
+  readJsonValue,
+  safeSetItem,
+} from '@/lib/persistence/safeLocalStore';
+import {
   type HistoricalEntryOptions,
   resolveOrderTimestamp,
 } from '@/lib/historicalEntry';
@@ -16,10 +26,15 @@ import {
 } from '@/lib/invoiceLifecycle';
 import { isWalkingCustomer } from '@/lib/walkingCustomer';
 import {
+  normalizeProductType,
   type CartonSize,
   type ProductType,
-  normalizeProductType,
 } from '@/lib/productTypes';
+import {
+  applyStockDeltasToProducts,
+  buildStockDeltaMap,
+  roundStockLevel,
+} from '@/lib/stockMovement';
 
 export type { ProductType, CartonSize };
 
@@ -198,12 +213,48 @@ const BACKUP_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 const listCache = new Map<string, unknown[]>();
 let settingsCacheKey = '';
 let settingsCache: ShopSettings | null = null;
+const storageRecoveredKeys = new Set<string>();
 
 export function clearStorageCache(): void {
   listCache.clear();
   settingsCacheKey = '';
   settingsCache = null;
   invalidateAllShopQueries();
+}
+
+function buildTenantAutosaveSnapshot(): TenantAutosavePayload {
+  const readList = <T,>(key: string): T[] => {
+    const cacheKey = scopedKey(key);
+    const cached = listCache.get(cacheKey);
+    if (cached) return cached as T[];
+    return readJsonValue<T[]>(cacheKey, []);
+  };
+
+  const settingsKey = scopedKey('settings');
+  const settings =
+    settingsCacheKey === settingsKey && settingsCache
+      ? settingsCache
+      : readJsonValue<ShopSettings>(settingsKey, DEFAULT_SETTINGS);
+
+  return {
+    version: 1,
+    savedAt: new Date().toISOString(),
+    products: readList<Product>('products'),
+    customers: readList<Customer>('customers'),
+    suppliers: readList<Supplier>('suppliers'),
+    invoices: readList<Invoice>('invoices'),
+    payments: readList<Payment>('payments'),
+    customerLedgers: readList<CustomerLedger>('customerLedgers'),
+    stockPurchases: readList<StockPurchase>('stockPurchases'),
+    supplierPayments: readList<SupplierPayment>('supplierPayments'),
+    settings,
+  };
+}
+
+function notifyStorageRecovered(key: string): void {
+  if (storageRecoveredKeys.has(key)) return;
+  storageRecoveredKeys.add(key);
+  console.warn(`[storage] Recovered "${key}" from local backup`);
 }
 
 function generateId(): string {
@@ -230,30 +281,16 @@ function generatePurchaseSlipNumber(orderDate?: string, manualNumber?: string): 
   return `PUR-${y}${m}${d}-${seq}`;
 }
 
-function addStockForPurchaseItem(item: StockPurchaseItem): string {
-  const itemType = normalizeProductType(item.productType);
-  if (item.productId) {
-    productStorage.updateStock(item.productId, item.quantity);
-    return item.productId;
-  }
-  const existing = productStorage.getAll().find(
-    (p) =>
-      p.name.toLowerCase() === item.productName.toLowerCase() &&
-      normalizeProductType(p.productType) === itemType &&
-      (itemType === 'oil' || p.cartonSize === item.cartonSize),
-  );
-  if (existing) {
-    productStorage.updateStock(existing.id, item.quantity);
-    return existing.id;
-  }
-  const created = productStorage.add({
-    name: item.productName,
-    productType: itemType,
-    cartonSize: itemType === 'carton' ? item.cartonSize : undefined,
-    pricePerLiter: item.pricePerLiter,
-    stock: item.quantity,
-  });
-  return created.id;
+function applyStockLines(
+  lines: { productId: string; quantity: number }[],
+  direction: 'in' | 'out',
+  options?: { skipValidation?: boolean },
+): void {
+  if (lines.length === 0) return;
+  const products = getAll<Product>('products');
+  const deltas = buildStockDeltaMap(lines, direction);
+  const updated = applyStockDeltasToProducts(products, deltas, options);
+  setAll('products', updated);
 }
 
 function scopedKey(key: string): string {
@@ -265,21 +302,26 @@ function getAll<T>(key: string): T[] {
   const cached = listCache.get(cacheKey);
   if (cached) return cached as T[];
 
-  try {
-    const data = localStorage.getItem(cacheKey);
-    const parsed: T[] = data ? JSON.parse(data) : [];
-    listCache.set(cacheKey, parsed);
-    return parsed;
-  } catch {
-    return [];
-  }
+  const parsed = readJsonValue<T[]>(cacheKey, [], {
+    onRecovered: () => notifyStorageRecovered(key),
+  });
+  listCache.set(cacheKey, parsed);
+  return parsed;
 }
 
 function setAll<T>(key: string, data: T[]): void {
   const cacheKey = scopedKey(key);
-  localStorage.setItem(cacheKey, JSON.stringify(data));
+  try {
+    safeSetItem(cacheKey, JSON.stringify(data));
+  } catch (error) {
+    if (error instanceof LocalStorageQuotaError) {
+      window.dispatchEvent(new Event(STORAGE_QUOTA_EVENT));
+    }
+    throw error;
+  }
   listCache.set(cacheKey, data);
   markTenantDataDirty();
+  scheduleTenantAutosave(buildTenantAutosaveSnapshot);
   const scopes = storageKeyToScopes(key);
   if (scopes.length > 0) {
     invalidateShopQueries(scopes);
@@ -313,7 +355,7 @@ function getStorageUsage(): { used: number; total: number; percentage: number } 
   let total = 0;
   const prefix = `tenant_${getCurrentTenantId()}_`;
   for (const key in localStorage) {
-    if (localStorage.hasOwnProperty(key) && key.startsWith(prefix)) {
+    if (Object.prototype.hasOwnProperty.call(localStorage, key) && key.startsWith(prefix)) {
       total += localStorage.getItem(key)!.length * 2;
     }
   }
@@ -328,11 +370,16 @@ export const productStorage = {
   add: (product: Omit<Product, 'id' | 'createdAt' | 'updatedAt'>): Product => {
     const products = getAll<Product>('products');
     const productType = normalizeProductType(product.productType);
+    const stock = roundStockLevel(
+      { productType },
+      product.stock,
+    );
     const newProduct: Product = {
       ...product,
       productType,
       cartonSize: productType === 'carton' ? product.cartonSize : undefined,
       category: product.category ?? '',
+      stock,
       id: generateId(),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -345,7 +392,19 @@ export const productStorage = {
     const products = getAll<Product>('products');
     const idx = products.findIndex(p => p.id === id);
     if (idx === -1) return undefined;
-    products[idx] = { ...products[idx], ...updates, updatedAt: new Date().toISOString() };
+    const current = products[idx];
+    const productType = normalizeProductType(updates.productType ?? current.productType);
+    const nextStock =
+      updates.stock !== undefined
+        ? roundStockLevel({ productType }, updates.stock)
+        : current.stock;
+    products[idx] = {
+      ...current,
+      ...updates,
+      productType,
+      stock: nextStock,
+      updatedAt: new Date().toISOString(),
+    };
     setAll('products', products);
     return products[idx];
   },
@@ -357,15 +416,24 @@ export const productStorage = {
     return true;
   },
   updateStock: (id: string, quantityChange: number): boolean => {
-    const products = getAll<Product>('products');
-    const idx = products.findIndex(p => p.id === id);
-    if (idx === -1) return false;
-    const newStock = products[idx].stock + quantityChange;
-    if (newStock < 0) return false;
-    products[idx].stock = newStock;
-    products[idx].updatedAt = new Date().toISOString();
-    setAll('products', products);
-    return true;
+    try {
+      const products = getAll<Product>('products');
+      const updated = applyStockDeltasToProducts(
+        products,
+        new Map([[id, quantityChange]]),
+      );
+      setAll('products', updated);
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  applyStockMovements: (
+    lines: { productId: string; quantity: number }[],
+    direction: 'in' | 'out',
+    options?: { skipValidation?: boolean },
+  ): void => {
+    applyStockLines(lines, direction, options);
   },
 };
 
@@ -416,14 +484,31 @@ export const invoiceStorage = {
       updatedAt: timestamp,
       historical: isHistorical,
     };
-    invoices.push(newInvoice);
-    setAll('invoices', invoices);
-    if (!options?.skipStockUpdate) {
-      for (const item of invoice.items) {
-        productStorage.updateStock(item.productId, -item.quantity);
+    const stockLines = invoice.items.map((item) => ({
+      productId: item.productId,
+      quantity: item.quantity,
+    }));
+    const shouldUpdateStock = !options?.skipStockUpdate;
+
+    if (shouldUpdateStock) {
+      applyStockLines(stockLines, 'out');
+    }
+
+    try {
+      invoices.push(newInvoice);
+      setAll('invoices', invoices);
+    } catch (error) {
+      if (shouldUpdateStock) {
+        applyStockLines(stockLines, 'in', { skipValidation: true });
       }
+      throw error;
     }
     if (!isWalkingCustomer(invoice.customerId)) {
+      const balanceBefore = paymentStorage.getCustomerBalance(invoice.customerId);
+      const advanceAvailable =
+        balanceBefore.balance < 0 ? Math.abs(balanceBefore.balance) : 0;
+      const advanceApplied = Math.min(advanceAvailable, invoice.total);
+
       paymentStorage.add({
         customerId: invoice.customerId,
         customerName: invoice.customerName,
@@ -435,6 +520,19 @@ export const invoiceStorage = {
           ? `Historical order ${newInvoice.invoiceNumber}`
           : `Invoice ${newInvoice.invoiceNumber}`,
       }, timestamp);
+
+      if (advanceApplied > 0) {
+        paymentStorage.add({
+          customerId: invoice.customerId,
+          customerName: invoice.customerName,
+          invoiceId: newInvoice.id,
+          invoiceNumber: newInvoice.invoiceNumber,
+          amount: advanceApplied,
+          type: 'credit',
+          note: `Advance applied to ${newInvoice.invoiceNumber}`,
+        }, timestamp);
+      }
+
       if (invoice.paidAmount > 0) {
         paymentStorage.add({
           customerId: invoice.customerId,
@@ -469,9 +567,14 @@ export const invoiceStorage = {
 
     const shouldRestoreStock = options.restoreStock && !invoice.historical;
     if (shouldRestoreStock) {
-      for (const item of invoice.items) {
-        productStorage.updateStock(item.productId, item.quantity);
-      }
+      applyStockLines(
+        invoice.items.map((item) => ({
+          productId: item.productId,
+          quantity: item.quantity,
+        })),
+        'in',
+        { skipValidation: true },
+      );
     }
 
     paymentStorage.removeByInvoiceId(id);
@@ -736,20 +839,27 @@ export const stockPurchaseStorage = {
     const timestamp = resolveOrderTimestamp(options?.orderDate);
     const isHistorical = Boolean(options?.orderDate || options?.skipStockUpdate);
     const purchases = getAll<StockPurchase>('stockPurchases');
-    const resolvedItems = options?.skipStockUpdate
-      ? purchase.items.map(item => ({ ...item }))
-      : purchase.items.map(item => {
-          const productId = addStockForPurchaseItem(item);
-          const product = productStorage.getById(productId);
-          return {
-            ...item,
-            productId,
-            productName: product?.name ?? item.productName,
-            productType: product?.productType ?? item.productType ?? 'oil',
-            cartonSize: product?.cartonSize ?? item.cartonSize,
-            category: product?.category ?? item.category ?? '',
-          };
-        });
+    const stockLines = purchase.items.map((item) => ({
+      productId: item.productId,
+      quantity: item.quantity,
+    }));
+    const shouldUpdateStock = !options?.skipStockUpdate;
+
+    if (shouldUpdateStock) {
+      applyStockLines(stockLines, 'in', { skipValidation: true });
+    }
+
+    const resolvedItems = purchase.items.map((item) => {
+      const product = productStorage.getById(item.productId);
+      return {
+        ...item,
+        productId: item.productId,
+        productName: product?.name ?? item.productName,
+        productType: product?.productType ?? item.productType ?? 'oil',
+        cartonSize: product?.cartonSize ?? item.cartonSize,
+        category: product?.category ?? item.category ?? '',
+      };
+    });
     const newPurchase: StockPurchase = {
       ...purchase,
       items: resolvedItems,
@@ -760,7 +870,15 @@ export const stockPurchaseStorage = {
       historical: isHistorical,
     };
     purchases.push(newPurchase);
-    setAll('stockPurchases', purchases);
+
+    try {
+      setAll('stockPurchases', purchases);
+    } catch (error) {
+      if (shouldUpdateStock) {
+        applyStockLines(stockLines, 'out');
+      }
+      throw error;
+    }
 
     supplierPaymentStorage.add({
       supplierId: purchase.supplierId,
@@ -800,8 +918,14 @@ export const stockPurchaseStorage = {
     const purchases = getAll<StockPurchase>('stockPurchases');
     const purchase = purchases.find(p => p.id === id);
     if (!purchase) return false;
-    for (const item of purchase.items) {
-      productStorage.updateStock(item.productId, -item.quantity);
+    if (!purchase.historical) {
+      applyStockLines(
+        purchase.items.map((item) => ({
+          productId: item.productId,
+          quantity: item.quantity,
+        })),
+        'out',
+      );
     }
     setAll('stockPurchases', purchases.filter(p => p.id !== id));
     return true;
@@ -861,23 +985,15 @@ export const settingsStorage = {
     const cacheKey = scopedKey('settings');
     if (settingsCacheKey === cacheKey && settingsCache) return settingsCache;
 
-    try {
-      const data = localStorage.getItem(cacheKey);
-      if (!data) {
-        settingsCacheKey = cacheKey;
-        settingsCache = DEFAULT_SETTINGS;
-        return DEFAULT_SETTINGS;
-      }
-      const parsed = JSON.parse(data) as Partial<ShopSettings> & { shopName?: string; currency?: string };
-      const merged = normalizeSettings(parsed);
-      settingsCacheKey = cacheKey;
-      settingsCache = merged;
-      return merged;
-    } catch {
-      settingsCacheKey = cacheKey;
-      settingsCache = DEFAULT_SETTINGS;
-      return DEFAULT_SETTINGS;
-    }
+    const parsed = readJsonValue<
+      Partial<ShopSettings> & { shopName?: string; currency?: string }
+    >(cacheKey, DEFAULT_SETTINGS, {
+      onRecovered: () => notifyStorageRecovered('settings'),
+    });
+    const merged = normalizeSettings(parsed);
+    settingsCacheKey = cacheKey;
+    settingsCache = merged;
+    return merged;
   },
   update: (updates: Partial<ShopSettings>): ShopSettings => {
     const { shopName: _shopName, taxRate: _taxRate, ...safeUpdates } = updates as Partial<ShopSettings> & {
@@ -887,10 +1003,11 @@ export const settingsStorage = {
     const current = settingsStorage.get();
     const updated = { ...current, ...safeUpdates };
     const cacheKey = scopedKey('settings');
-    localStorage.setItem(cacheKey, JSON.stringify(updated));
+    safeSetItem(cacheKey, JSON.stringify(updated));
     settingsCacheKey = cacheKey;
     settingsCache = updated;
     markTenantDataDirty();
+    scheduleTenantAutosave(buildTenantAutosaveSnapshot);
     invalidateShopQueries('settings');
     return updated;
   },
@@ -956,10 +1073,12 @@ export const backupStorage = {
         const settings = normalizeSettings(
           data.settings as Partial<ShopSettings> & { shopName?: string; currency?: string }
         );
-        localStorage.setItem(scopedKey('settings'), JSON.stringify(settings));
+        safeSetItem(scopedKey('settings'), JSON.stringify(settings));
         settingsCacheKey = scopedKey('settings');
         settingsCache = settings;
       }
+      scheduleTenantAutosave(buildTenantAutosaveSnapshot);
+      flushTenantAutosave(buildTenantAutosaveSnapshot);
       invalidateAllShopQueries();
       return { success: true, message: 'Data restored successfully' };
     } catch {
@@ -970,7 +1089,13 @@ export const backupStorage = {
 };
 
 export const SETTINGS_UPDATED_EVENT = 'oilshop-settings-updated';
+export const STORAGE_QUOTA_EVENT = 'oilshop-storage-quota';
 
 export function notifySettingsUpdated(): void {
   window.dispatchEvent(new Event(SETTINGS_UPDATED_EVENT));
+}
+
+/** Force-write the debounced local safety snapshot (e.g. before tab close). */
+export function flushLocalDataSnapshot(): void {
+  flushTenantAutosave(buildTenantAutosaveSnapshot);
 }

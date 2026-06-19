@@ -13,12 +13,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import {
-  invoiceStorage,
-  productStorage,
-  customerStorage,
-  settingsStorage,
-} from "@/lib/storage";
+import { useDashboardQuery } from "@/hooks/useShopData";
 import { formatMoney, formatMoneyWhole } from "@/lib/currency";
 import { isLowStockAlert } from "@/lib/inventory";
 import { formatStockShort } from "@/lib/productTypes";
@@ -27,10 +22,10 @@ import { isActiveSale } from "@/lib/invoiceLifecycle";
 import TodaySalesBreakdown from "@/components/dashboard/TodaySalesBreakdown";
 
 export default function Dashboard() {
-  const settings = settingsStorage.get();
-  const invoices = invoiceStorage.getAll();
-  const products = productStorage.getAll();
-  const customers = customerStorage.getAll();
+  const { data: dashboardData } = useDashboardQuery();
+  const invoices = dashboardData?.invoices ?? [];
+  const products = dashboardData?.products ?? [];
+  const customers = dashboardData?.customers ?? [];
 
   const stats = useMemo(() => {
     const todaySales = invoices

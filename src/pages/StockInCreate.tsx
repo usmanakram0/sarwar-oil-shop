@@ -18,7 +18,6 @@ import { type StockPurchase, type StockPurchaseItem } from "@/lib/storage";
 import { useProductsList, useSuppliersList } from "@/hooks/useShopData";
 import { useStockPurchaseMutations } from "@/hooks/useShopMutations";
 import {
-  CARTON_SIZES,
   filterProductsByType,
   formatStockShort,
   productDisplayName,
@@ -28,10 +27,10 @@ import {
 import { toast } from "sonner";
 import { CURRENCY, formatMoney } from "@/lib/currency";
 import { formatDateInputValue, validateOrderDate } from "@/lib/historicalEntry";
+import { normalizeLineQuantity, StockMovementError } from "@/lib/stockMovement";
 
 type DraftItem = {
   productType: ProductType;
-  mode: "existing" | "new";
   productId: string;
   productName: string;
   cartonSize: CartonSize | "";
@@ -42,7 +41,6 @@ type DraftItem = {
 
 const emptyItem = (productType: ProductType = "oil"): DraftItem => ({
   productType,
-  mode: "existing",
   productId: "",
   productName: "",
   cartonSize: "",
@@ -86,11 +84,10 @@ export default function StockInCreate() {
       item = {
         ...emptyItem(patch.productType),
         productType: patch.productType,
-        mode: item.mode,
       };
     }
 
-    if (patch.productId !== undefined && item.mode === "existing") {
+    if (patch.productId !== undefined) {
       const product = products.find((p) => p.id === patch.productId);
       if (product) {
         item.productId = product.id;
@@ -125,16 +122,12 @@ export default function StockInCreate() {
     const supplier = suppliers.find((s) => s.id === supplierId);
     if (!supplier) return;
 
-    const validItems = items.filter((i) => {
-      if (i.quantity <= 0 || i.totalPrice <= 0) return false;
-      if (i.mode === "existing") return Boolean(i.productId);
-      if (i.productName.trim().length < 2) return false;
-      if (i.productType === "carton" && !i.cartonSize) return false;
-      return true;
-    });
+    const validItems = items.filter(
+      (i) => i.productId && i.quantity > 0 && i.totalPrice > 0,
+    );
 
     if (validItems.length === 0) {
-      toast.error("Add at least one line with quantity and total price");
+      toast.error("Add at least one product with quantity and total price");
       return;
     }
 
@@ -146,8 +139,25 @@ export default function StockInCreate() {
       }
     }
 
+    if (!isHistorical) {
+      try {
+        for (const item of validItems) {
+          const product = products.find((p) => p.id === item.productId);
+          if (!product) {
+            throw new StockMovementError("Product not found");
+          }
+          normalizeLineQuantity(product, item.quantity);
+        }
+      } catch (error) {
+        toast.error(
+          error instanceof Error ? error.message : "Invalid stock quantity",
+        );
+        return;
+      }
+    }
+
     const purchaseItems: StockPurchaseItem[] = validItems.map((i) => ({
-      productId: i.mode === "existing" ? i.productId : "",
+      productId: i.productId,
       productName: i.productName.trim(),
       productType: i.productType,
       cartonSize:
@@ -193,7 +203,10 @@ export default function StockInCreate() {
           );
           navigate(`/stock-in/${purchase.id}`);
         },
-        onError: () => toast.error("Could not save purchase"),
+        onError: (error) =>
+          toast.error(
+            error instanceof Error ? error.message : "Could not save purchase",
+          ),
       },
     );
   };
@@ -223,99 +236,40 @@ export default function StockInCreate() {
             </SelectContent>
           </Select>
 
-          <Select
-            value={item.mode}
-            onValueChange={(v) =>
-              updateItem(index, {
-                mode: v as "existing" | "new",
-                productId: "",
-                productName: "",
-                cartonSize: "",
-              })
-            }>
-            <SelectTrigger className="w-[140px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="existing">
-                Existing {isCarton ? "carton" : "oil"}
-              </SelectItem>
-              <SelectItem value="new">
-                New {isCarton ? "carton" : "oil"}
-              </SelectItem>
-            </SelectContent>
-          </Select>
+          <div className="flex-1 min-w-[180px]">
+            <Select
+              value={item.productId}
+              onValueChange={(v) => updateItem(index, { productId: v })}>
+              <SelectTrigger>
+                <SelectValue
+                  placeholder={`Select ${isCarton ? "carton" : "oil"} product`}
+                />
+              </SelectTrigger>
+              <SelectContent>
+                {typeProducts.length === 0 ? (
+                  <SelectItem value="__none" disabled>
+                    No products yet
+                  </SelectItem>
+                ) : (
+                  typeProducts.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {productDisplayName(p)} ({formatStockShort(p)})
+                    </SelectItem>
+                  ))
+                )}
+              </SelectContent>
+            </Select>
+          </div>
 
           <Button
             variant="ghost"
             size="icon"
-            className="h-9 w-9 text-destructive ml-auto shrink-0"
+            className="h-9 w-9 text-destructive shrink-0"
             onClick={() => removeItem(index)}
             disabled={items.length <= 1}>
             <Trash2 className="w-4 h-4" />
           </Button>
         </div>
-
-        {item.mode === "existing" ? (
-          <Select
-            value={item.productId}
-            onValueChange={(v) => updateItem(index, { productId: v })}>
-            <SelectTrigger>
-              <SelectValue
-                placeholder={`Select ${isCarton ? "carton" : "oil"} in store`}
-              />
-            </SelectTrigger>
-            <SelectContent>
-              {typeProducts.map((p) => (
-                <SelectItem key={p.id} value={p.id}>
-                  {productDisplayName(p)} ({formatStockShort(p)})
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        ) : (
-          <div className={`grid gap-2 ${isCarton ? "sm:grid-cols-2" : ""}`}>
-            <div>
-              <FormLabel className="text-xs" required>
-                {isCarton ? "Carton name" : "Oil name"}
-              </FormLabel>
-              <Input
-                placeholder={
-                  isCarton
-                    ? "e.g. Shell Helix Carton"
-                    : "e.g. Shell Helix 10W-40"
-                }
-                value={item.productName}
-                onChange={(e) =>
-                  updateItem(index, { productName: e.target.value })
-                }
-              />
-            </div>
-            {isCarton && (
-              <div>
-                <FormLabel className="text-xs" required>
-                  Carton size
-                </FormLabel>
-                <Select
-                  value={item.cartonSize}
-                  onValueChange={(v) =>
-                    updateItem(index, { cartonSize: v as CartonSize })
-                  }>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select size" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {CARTON_SIZES.map((size) => (
-                      <SelectItem key={size.value} value={size.value}>
-                        {size.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-          </div>
-        )}
 
         <div className="flex gap-2 items-end flex-wrap">
           <div className="w-28">
@@ -468,8 +422,11 @@ export default function StockInCreate() {
         </CardHeader>
         <CardContent className="space-y-3">
           <p className="text-xs text-muted-foreground">
-            Matching product name adds to existing stock; new name creates a
-            product from zero.
+            Select products already added from the{" "}
+            <Link to="/products" className="text-primary underline">
+              Products
+            </Link>{" "}
+            page. Stock in only adds quantity to existing products.
           </p>
           {items.map((item, index) => renderLine(item, index))}
         </CardContent>

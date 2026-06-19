@@ -60,3 +60,43 @@ export async function hasSupabaseSession(): Promise<boolean> {
   const { data } = await supabase.auth.getSession();
   return Boolean(data.session);
 }
+
+/** Try to restore Supabase Auth using the current local app login. */
+export async function reconnectSupabaseFromLocalSession(
+  email: string,
+  password: string
+): Promise<{ ok: boolean; message?: string }> {
+  if (!isSupabaseConfigured || !supabase) {
+    return {
+      ok: false,
+      message: 'Cloud is not configured on this site (missing Supabase env vars)',
+    };
+  }
+  if (!navigator.onLine) {
+    return { ok: false, message: 'No internet connection' };
+  }
+
+  const result = await signInSupabaseIfOnline(email, password);
+  if (result.ok) return { ok: true };
+
+  if (result.error === 'offline-or-unconfigured') {
+    return {
+      ok: false,
+      message: 'Cloud is not configured on this site, or you are offline',
+    };
+  }
+
+  const detail = result.error ?? 'Unknown error';
+  if (/confirm|verified|email/i.test(detail)) {
+    return {
+      ok: false,
+      message:
+        'Confirm your email in Supabase first, then sign out and sign in again.',
+    };
+  }
+
+  return {
+    ok: false,
+    message: `Cloud sign-in failed: ${detail}. Use the same email/password in Supabase Auth, or sign out and sign in again.`,
+  };
+}

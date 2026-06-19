@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { useForm } from "react-hook-form";
 
@@ -7,8 +7,10 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { Download, Upload, HardDrive, Cloud } from "lucide-react";
 
 import { useSync } from "@/contexts/SyncContext";
-
+import { useAuth } from "@/contexts/AuthContext";
 import { isSupabaseConfigured } from "@/lib/supabase/client";
+import { hasSupabaseSession } from "@/lib/supabase/authBridge";
+import { reconnectCloudSession } from "@/lib/auth";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -45,8 +47,15 @@ export default function SettingsPage() {
   );
 
   const { syncNow, lastSyncedAt, pendingChanges, isOnline, status } = useSync();
+  const { session } = useAuth();
 
   const [syncing, setSyncing] = useState(false);
+  const [cloudConnected, setCloudConnected] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    void hasSupabaseSession().then(setCloudConnected);
+  }, [status, lastSyncedAt, session?.userId]);
 
   const updateSettings = useSettingsMutation();
 
@@ -220,9 +229,26 @@ export default function SettingsPage() {
 
           <CardContent className="space-y-3 text-sm">
             <p className="text-muted-foreground">
-              Data is saved on this device first. When you have power and
-              internet, upload to Supabase.
+              Data is saved on this device first. Cloud upload needs internet
+              plus a Supabase login (same email/password as this app).
             </p>
+
+            {session && (
+              <div className="rounded-lg border bg-muted/30 px-3 py-2 space-y-1 text-xs">
+                <p>
+                  <span className="text-muted-foreground">App login:</span>{" "}
+                  {session.email}
+                </p>
+                <p>
+                  <span className="text-muted-foreground">Cloud:</span>{" "}
+                  {cloudConnected === null
+                    ? "Checking…"
+                    : cloudConnected
+                      ? "Connected"
+                      : "Not connected — sync paused"}
+                </p>
+              </div>
+            )}
 
             {lastSyncedAt && (
               <p className="text-muted-foreground">
@@ -234,6 +260,29 @@ export default function SettingsPage() {
               <p className="text-amber-700 dark:text-amber-300">
                 Local changes waiting to upload
               </p>
+            )}
+
+            {cloudConnected === false && (
+              <Button
+                variant="secondary"
+                className="w-full"
+                disabled={syncing || !isOnline}
+                onClick={async () => {
+                  setSyncing(true);
+                  const reconnect = await reconnectCloudSession();
+                  if (!reconnect.ok) {
+                    setSyncing(false);
+                    toast.error(reconnect.message || "Could not connect to cloud");
+                    return;
+                  }
+                  setCloudConnected(true);
+                  const result = await syncNow();
+                  setSyncing(false);
+                  if (result.ok) toast.success("Connected and synced to cloud");
+                  else toast.error(result.message || "Connected but sync failed");
+                }}>
+                Connect cloud & sync
+              </Button>
             )}
 
             <Button

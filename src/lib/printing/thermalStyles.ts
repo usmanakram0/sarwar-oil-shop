@@ -1,23 +1,16 @@
-/** Thermal receipt defaults matching shop printer setup (Envelope Monarch, min margins, portrait). */
-export const THERMAL_PAGE_WIDTH_MM = 98.425;
-export const THERMAL_PAGE_WIDTH_PX = Math.round((THERMAL_PAGE_WIDTH_MM / 25.4) * 96);
+/** Receipt print styles — paper size and margins come from the browser print dialog. */
 
 export const THERMAL_PRINT_STYLES = `
-  @page {
-    size: ${THERMAL_PAGE_WIDTH_MM}mm auto;
-    margin: 0;
-  }
-
   * {
     box-sizing: border-box;
   }
 
   html, body {
-    width: ${THERMAL_PAGE_WIDTH_PX}px;
-    max-width: ${THERMAL_PAGE_WIDTH_PX}px;
+    width: 100%;
     margin: 0;
     padding: 0;
     font-family: Arial, Helvetica, sans-serif;
+    font-size: 14px;
     color: #000;
     background: #fff;
     -webkit-print-color-adjust: exact;
@@ -25,11 +18,10 @@ export const THERMAL_PRINT_STYLES = `
   }
 
   .receipt-container {
-    width: ${THERMAL_PAGE_WIDTH_PX}px;
-    max-width: ${THERMAL_PAGE_WIDTH_PX}px;
+    width: 100%;
     margin: 0 auto;
     padding: 8px 10px 12px;
-    line-height: 1.4;
+    line-height: 1.5;
   }
 
   .header {
@@ -39,15 +31,16 @@ export const THERMAL_PRINT_STYLES = `
 
   .header h2 {
     margin: 0 0 2px;
-    font-size: 18px;
+    font-size: 24px;
     font-weight: 900;
-    line-height: 1.2;
+    line-height: 1.25;
+    letter-spacing: 0.02em;
   }
 
   .header p {
     margin: 0;
-    font-size: 11px;
-    line-height: 1.35;
+    font-size: 14px;
+    line-height: 1.45;
   }
 
   .header-address {
@@ -63,7 +56,7 @@ export const THERMAL_PRINT_STYLES = `
 
   .title-row td {
     padding: 0;
-    font-size: 11px;
+    font-size: 14px;
     font-weight: 700;
     vertical-align: top;
   }
@@ -75,8 +68,8 @@ export const THERMAL_PRINT_STYLES = `
 
   .section-title {
     margin: 4px 0 2px;
-    font-size: 14px;
-    font-weight: 700;
+    font-size: 18px;
+    font-weight: 800;
     text-align: center;
   }
 
@@ -89,8 +82,8 @@ export const THERMAL_PRINT_STYLES = `
 
   .meta-table td,
   .totals-table td {
-    padding: 2px 0;
-    font-size: 11px;
+    padding: 3px 0;
+    font-size: 14px;
     vertical-align: top;
     text-align: left;
   }
@@ -107,6 +100,7 @@ export const THERMAL_PRINT_STYLES = `
   .totals-table td.value {
     width: 58%;
     word-break: break-word;
+    font-weight: 600;
   }
 
   .meta-table tr.uppercase .value {
@@ -128,15 +122,17 @@ export const THERMAL_PRINT_STYLES = `
   .products-table td {
     border: 1px solid #000;
     padding: 3px 2px;
-    font-size: 10px;
+    font-size: 14px;
     text-align: left;
     vertical-align: top;
     word-wrap: break-word;
     overflow-wrap: anywhere;
+    line-height: 1.45;
   }
 
   .products-table th {
-    font-weight: 700;
+    font-weight: 800;
+    font-size: 13px;
   }
 
   .products-table.cols-4 th:nth-child(1),
@@ -166,14 +162,26 @@ export const THERMAL_PRINT_STYLES = `
 
   .totals-table td.value {
     text-align: right;
-    font-weight: 600;
+    font-weight: 700;
+  }
+
+  .totals-table tr:last-child td {
+    font-size: 15px;
+    font-weight: 800;
+  }
+
+  .totals-table tr.totals-emphasis td {
+    font-size: 16px;
+    font-weight: 800;
+    padding-top: 4px;
   }
 
   .note-text {
     margin: 6px 0 0;
-    font-size: 10px;
+    font-size: 13px;
     text-align: left;
     word-break: break-word;
+    line-height: 1.45;
   }
 
   .footer {
@@ -183,7 +191,9 @@ export const THERMAL_PRINT_STYLES = `
 
   .footer p {
     margin: 0;
-    font-size: 11px;
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.45;
   }
 
   hr {
@@ -215,11 +225,13 @@ export function buildMetaTableRows(
     .join('');
 }
 
-export function buildTotalsTableRows(rows: Array<{ label: string; value: string }>): string {
+export function buildTotalsTableRows(
+  rows: Array<{ label: string; value: string; emphasize?: boolean }>
+): string {
   return rows
     .map(
       (row) => `
-        <tr>
+        <tr class="${row.emphasize ? 'totals-emphasis' : ''}">
           <td class="label">${escapeHtml(row.label)}</td>
           <td class="value">${escapeHtml(row.value)}</td>
         </tr>`
@@ -232,7 +244,7 @@ export function buildReceiptDocument(bodyHtml: string): string {
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=${THERMAL_PAGE_WIDTH_MM}mm, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Receipt</title>
   <style>${THERMAL_PRINT_STYLES}</style>
 </head>

@@ -22,6 +22,10 @@ import {
   resolveOrderTimestamp,
 } from '@/lib/historicalEntry';
 import { type InvoiceCloseOptions } from '@/lib/invoiceLifecycle';
+import {
+  applyStockDeltasToProducts,
+  buildStockDeltaMap,
+} from '@/lib/stockMovement';
 import { queryClient } from '@/lib/query/client';
 import { queryKeys } from '@/lib/query/keys';
 import {
@@ -302,17 +306,16 @@ export function useInvoiceMutations() {
       } satisfies Invoice);
 
       if (!options?.skipStockUpdate) {
-        queryClient.setQueryData<Product[]>(queryKeys.products, old =>
-          (old ?? []).map(p => {
-            const item = invoice.items.find(i => i.productId === p.id);
-            if (!item) return p;
-            return {
-              ...p,
-              stock: p.stock - item.quantity,
-              updatedAt: new Date().toISOString(),
-            };
-          })
-        );
+        queryClient.setQueryData<Product[]>(queryKeys.products, (old) => {
+          const deltas = buildStockDeltaMap(
+            invoice.items.map((item) => ({
+              productId: item.productId,
+              quantity: item.quantity,
+            })),
+            'out',
+          );
+          return applyStockDeltasToProducts(old ?? [], deltas);
+        });
       }
       return ctx;
     },
@@ -350,17 +353,18 @@ export function useInvoiceMutations() {
       if (invoice) {
         const shouldRestoreStock = options.restoreStock && !invoice.historical;
         if (shouldRestoreStock) {
-          queryClient.setQueryData<Product[]>(queryKeys.products, old =>
-            (old ?? []).map(p => {
-              const item = invoice.items.find(i => i.productId === p.id);
-              if (!item) return p;
-              return {
-                ...p,
-                stock: p.stock + item.quantity,
-                updatedAt: new Date().toISOString(),
-              };
-            })
-          );
+          queryClient.setQueryData<Product[]>(queryKeys.products, (old) => {
+            const deltas = buildStockDeltaMap(
+              invoice.items.map((item) => ({
+                productId: item.productId,
+                quantity: item.quantity,
+              })),
+              'in',
+            );
+            return applyStockDeltasToProducts(old ?? [], deltas, {
+              skipValidation: true,
+            });
+          });
         }
 
         const closedAt = new Date().toISOString();
@@ -455,6 +459,21 @@ export function useStockPurchaseMutations() {
         updatedAt: timestamp,
         historical: isHistorical,
       } satisfies StockPurchase);
+
+      if (!options?.skipStockUpdate) {
+        queryClient.setQueryData<Product[]>(queryKeys.products, (old) => {
+          const deltas = buildStockDeltaMap(
+            purchase.items.map((item) => ({
+              productId: item.productId,
+              quantity: item.quantity,
+            })),
+            'in',
+          );
+          return applyStockDeltasToProducts(old ?? [], deltas, {
+            skipValidation: true,
+          });
+        });
+      }
       return ctx;
     },
     onSuccess: created => replaceOptimisticItem(queryKeys.stockPurchases, created),
@@ -477,13 +496,16 @@ export function useStockPurchaseMutations() {
       ]);
       removeListItem<StockPurchase>(queryKeys.stockPurchases, id);
       if (purchase && !purchase.historical) {
-        queryClient.setQueryData<Product[]>(queryKeys.products, old =>
-          (old ?? []).map(p => {
-            const item = purchase.items.find(i => i.productId === p.id);
-            if (!item) return p;
-            return { ...p, stock: p.stock - item.quantity };
-          })
-        );
+        queryClient.setQueryData<Product[]>(queryKeys.products, (old) => {
+          const deltas = buildStockDeltaMap(
+            purchase.items.map((item) => ({
+              productId: item.productId,
+              quantity: item.quantity,
+            })),
+            'out',
+          );
+          return applyStockDeltasToProducts(old ?? [], deltas);
+        });
       }
       return ctx;
     },

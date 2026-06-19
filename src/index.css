@@ -117,13 +117,8 @@
   }
 }
 
-/* Print styles — hide app chrome, show only printable content with proper layout */
+/* Print styles — hide app chrome; paper size and margins use the browser print dialog */
 @media print {
-  @page {
-    size: A4 portrait;
-    margin: 12mm;
-  }
-
   body {
     background: #fff !important;
     color: #000 !important;

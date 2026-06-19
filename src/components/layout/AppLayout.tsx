@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils';
 import UserSidebarFooter from '@/components/layout/UserSidebarFooter';
 import SyncStatusBanner from '@/components/sync/SyncStatusBanner';
 import WeeklyBackupReminder from '@/components/backup/WeeklyBackupReminder';
+import DataPersistenceGuard from '@/components/persistence/DataPersistenceGuard';
 
 const navItems = [
   { title: 'Dashboard', path: '/', icon: LayoutDashboard },
@@ -210,6 +211,7 @@ export default function AppLayout() {
 
         <div className="no-print">
           <SyncStatusBanner />
+          <DataPersistenceGuard />
           <WeeklyBackupReminder />
         </div>
 

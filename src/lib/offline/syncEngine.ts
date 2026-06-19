@@ -1,5 +1,5 @@
 import { SHOP_NAME } from '@/lib/shop';
-import { getSession } from '@/lib/auth';
+import { getSession, reconnectCloudSession } from '@/lib/auth';
 import { isSupabaseConfigured, supabase } from '@/lib/supabase/client';
 import {
   customerStorage,
@@ -204,11 +204,20 @@ export async function pushLocalDataToSupabase(): Promise<{
 
   const { data: authData } = await supabase.auth.getSession();
   if (!authData.session) {
-    emitSyncStatus({
-      state: 'no-auth',
-      message: 'Cloud sign-in required — use the same email/password in Supabase Auth',
-    });
-    return { ok: false, message: 'No Supabase session' };
+    const reconnect = await reconnectCloudSession();
+    const { data: retryAuth } = await supabase.auth.getSession();
+    if (!retryAuth.session) {
+      emitSyncStatus({
+        state: 'no-auth',
+        message:
+          reconnect.message ??
+          'Cloud sign-in required — sign out, then sign in again with the same email/password',
+      });
+      return {
+        ok: false,
+        message: reconnect.message ?? 'No Supabase session',
+      };
+    }
   }
 
   if (syncInFlight) {

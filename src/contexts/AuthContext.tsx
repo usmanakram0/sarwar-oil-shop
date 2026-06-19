@@ -52,8 +52,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     refreshSession();
     setIsLoading(false);
     const onAuthChange = () => refreshSession();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        refreshSession();
+      }
+    };
     window.addEventListener(AUTH_CHANGED_EVENT, onAuthChange);
-    return () => window.removeEventListener(AUTH_CHANGED_EVENT, onAuthChange);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener(AUTH_CHANGED_EVENT, onAuthChange);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [refreshSession]);
 
   const login = useCallback(async (email: string, password: string) => {

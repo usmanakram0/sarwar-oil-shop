@@ -1,26 +1,31 @@
-import { useState, useMemo } from 'react';
-import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { Plus, Search, Pencil, Trash2 } from 'lucide-react';
-import { Card, CardContent } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { FormLabel } from '@/components/ui/FormLabel';
-import ListPagination from '@/components/ui/ListPagination';
+import { useState, useMemo } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { Plus, Search, Pencil, Trash2 } from "lucide-react";
+import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { FormLabel } from "@/components/ui/FormLabel";
+import ListPagination from "@/components/ui/ListPagination";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select';
-import { CURRENCY, formatMoney } from '@/lib/currency';
-import { isLowStock, isOutOfStock } from '@/lib/inventory';
-import { productSchema, type ProductFormData } from '@/lib/validation';
-import { useProductsList } from '@/hooks/useShopData';
-import { useProductMutations } from '@/hooks/useShopMutations';
-import { usePagination } from '@/hooks/usePagination';
+} from "@/components/ui/select";
+import { CURRENCY, formatMoney } from "@/lib/currency";
+import { isLowStock, isOutOfStock } from "@/lib/inventory";
+import { productSchema, type ProductFormData } from "@/lib/validation";
+import { useProductsList } from "@/hooks/useShopData";
+import { useProductMutations } from "@/hooks/useShopMutations";
+import { usePagination } from "@/hooks/usePagination";
 import {
   CARTON_SIZES,
   PRODUCT_TYPES,
@@ -31,18 +36,22 @@ import {
   productTypeBadgeLabel,
   type CartonSize,
   type ProductType,
-} from '@/lib/productTypes';
-import { toast } from 'sonner';
-import ConfirmDeleteDialog from '@/components/ConfirmDeleteDialog';
-import { Badge } from '@/components/ui/badge';
-import type { Product } from '@/lib/storage';
+} from "@/lib/productTypes";
+import { toast } from "sonner";
+import ConfirmDeleteDialog from "@/components/ConfirmDeleteDialog";
+import { Badge } from "@/components/ui/badge";
+import type { Product } from "@/lib/storage";
 
 export default function Products() {
   const cur = CURRENCY;
   const { products } = useProductsList();
-  const { add: addProduct, update: updateProduct, remove: deleteProduct } = useProductMutations();
-  const [search, setSearch] = useState('');
-  const [typeFilter, setTypeFilter] = useState<'all' | ProductType>('all');
+  const {
+    add: addProduct,
+    update: updateProduct,
+    remove: deleteProduct,
+  } = useProductMutations();
+  const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState<"all" | ProductType>("all");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Product | null>(null);
@@ -50,22 +59,23 @@ export default function Products() {
   const form = useForm<ProductFormData>({
     resolver: zodResolver(productSchema),
     defaultValues: {
-      name: '',
-      productType: 'oil',
+      name: "",
+      productType: "oil",
       cartonSize: undefined,
-      pricePerLiter: 0,
+      pricePerLiter: undefined,
       stock: 0,
     },
   });
 
-  const watchedType = form.watch('productType');
-  const isCartonForm = watchedType === 'carton';
+  const watchedType = form.watch("productType");
+  const isCartonForm = watchedType === "carton";
 
   const filtered = useMemo(() => {
     return products.filter((p) => {
       const matchSearch = p.name.toLowerCase().includes(search.toLowerCase());
       const matchType =
-        typeFilter === 'all' || normalizeProductType(p.productType) === typeFilter;
+        typeFilter === "all" ||
+        normalizeProductType(p.productType) === typeFilter;
       return matchSearch && matchType;
     });
   }, [products, search, typeFilter]);
@@ -83,10 +93,10 @@ export default function Products() {
   const openAdd = () => {
     setEditingProduct(null);
     form.reset({
-      name: '',
-      productType: 'oil',
+      name: "",
+      productType: "oil",
       cartonSize: undefined,
-      pricePerLiter: 0,
+      pricePerLiter: undefined,
       stock: 0,
     });
     setDialogOpen(true);
@@ -98,7 +108,7 @@ export default function Products() {
     form.reset({
       name: product.name,
       productType,
-      cartonSize: productType === 'carton' ? product.cartonSize : undefined,
+      cartonSize: productType === "carton" ? product.cartonSize : undefined,
       pricePerLiter: product.pricePerLiter,
       stock: product.stock,
     });
@@ -106,10 +116,10 @@ export default function Products() {
   };
 
   const onSubmit = (data: ProductFormData) => {
-    const payload: Omit<Product, 'id' | 'createdAt' | 'updatedAt'> = {
+    const payload: Omit<Product, "id" | "createdAt" | "updatedAt"> = {
       name: data.name,
       productType: data.productType,
-      cartonSize: data.productType === 'carton' ? data.cartonSize : undefined,
+      cartonSize: data.productType === "carton" ? data.cartonSize : undefined,
       pricePerLiter: data.pricePerLiter,
       stock: data.stock,
     };
@@ -119,10 +129,10 @@ export default function Products() {
         { id: editingProduct.id, data: payload },
         {
           onSuccess: () => {
-            toast.success('Product updated');
+            toast.success("Product updated");
             setDialogOpen(false);
           },
-          onError: () => toast.error('Could not update product'),
+          onError: () => toast.error("Could not update product"),
         },
       );
       return;
@@ -130,23 +140,26 @@ export default function Products() {
 
     const exists = products.find((p) => {
       if (p.name.toLowerCase() !== data.name.toLowerCase()) return false;
-      if (normalizeProductType(p.productType) !== data.productType) return false;
-      if (data.productType === 'carton') {
+      if (normalizeProductType(p.productType) !== data.productType)
+        return false;
+      if (data.productType === "carton") {
         return p.cartonSize === data.cartonSize;
       }
       return true;
     });
     if (exists) {
-      form.setError('name', { message: 'Product with this name already exists' });
+      form.setError("name", {
+        message: "Product with this name already exists",
+      });
       return;
     }
 
     addProduct.mutate(payload, {
       onSuccess: () => {
-        toast.success('Product added');
+        toast.success("Product added");
         setDialogOpen(false);
       },
-      onError: () => toast.error('Could not add product'),
+      onError: () => toast.error("Could not add product"),
     });
   };
 
@@ -154,10 +167,10 @@ export default function Products() {
     if (!deleteTarget) return;
     deleteProduct.mutate(deleteTarget.id, {
       onSuccess: () => {
-        toast.success('Product deleted');
+        toast.success("Product deleted");
         setDeleteTarget(null);
       },
-      onError: () => toast.error('Could not delete product'),
+      onError: () => toast.error("Could not delete product"),
     });
   };
 
@@ -167,7 +180,9 @@ export default function Products() {
     }
     if (isLowStock(product)) {
       return (
-        <Badge variant="outline" className="border-destructive text-destructive">
+        <Badge
+          variant="outline"
+          className="border-destructive text-destructive">
           Low
         </Badge>
       );
@@ -201,7 +216,7 @@ export default function Products() {
         </div>
         <Select
           value={typeFilter}
-          onValueChange={(v) => setTypeFilter(v as 'all' | ProductType)}>
+          onValueChange={(v) => setTypeFilter(v as "all" | ProductType)}>
           <SelectTrigger className="w-full sm:w-[160px]">
             <SelectValue placeholder="All types" />
           </SelectTrigger>
@@ -239,7 +254,9 @@ export default function Products() {
                         </Badge>
                       )}
                     </div>
-                    <h3 className="font-heading font-semibold">{product.name}</h3>
+                    <h3 className="font-heading font-semibold">
+                      {product.name}
+                    </h3>
                   </div>
                   {getStockBadge(product)}
                 </div>
@@ -294,7 +311,7 @@ export default function Products() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="font-heading">
-              {editingProduct ? 'Edit Product' : 'Add Product'}
+              {editingProduct ? "Edit Product" : "Add Product"}
             </DialogTitle>
           </DialogHeader>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
@@ -302,7 +319,7 @@ export default function Products() {
               <FormLabel htmlFor="name" required>
                 Product Name
               </FormLabel>
-              <Input id="name" {...form.register('name')} />
+              <Input id="name" {...form.register("name")} />
               {form.formState.errors.name && (
                 <p className="text-xs text-destructive mt-1">
                   {form.formState.errors.name.message}
@@ -316,9 +333,9 @@ export default function Products() {
                 value={watchedType}
                 disabled={Boolean(editingProduct)}
                 onValueChange={(v) => {
-                  form.setValue('productType', v as ProductType);
-                  if (v === 'oil') {
-                    form.setValue('cartonSize', undefined);
+                  form.setValue("productType", v as ProductType);
+                  if (v === "oil") {
+                    form.setValue("cartonSize", undefined);
                   }
                 }}>
                 <SelectTrigger>
@@ -338,10 +355,10 @@ export default function Products() {
               <div>
                 <FormLabel required>Carton Size</FormLabel>
                 <Select
-                  value={form.watch('cartonSize') ?? ''}
+                  value={form.watch("cartonSize") ?? ""}
                   disabled={Boolean(editingProduct)}
                   onValueChange={(v) =>
-                    form.setValue('cartonSize', v as CartonSize)
+                    form.setValue("cartonSize", v as CartonSize)
                   }>
                   <SelectTrigger>
                     <SelectValue placeholder="Select size" />
@@ -372,8 +389,9 @@ export default function Products() {
                 <Input
                   id="price"
                   type="number"
+                  min={0.01}
                   step="0.01"
-                  {...form.register('pricePerLiter')}
+                  {...form.register("pricePerLiter")}
                 />
                 {form.formState.errors.pricePerLiter && (
                   <p className="text-xs text-destructive mt-1">
@@ -382,10 +400,17 @@ export default function Products() {
                 )}
               </div>
               <div>
-                <FormLabel htmlFor="stock" required>
-                  {isCartonForm ? 'Stock (Cartons)' : 'Stock (Liters)'}
+                <FormLabel htmlFor="stock">
+                  {isCartonForm ? "Stock (Cartons)" : "Stock (Liters)"}
                 </FormLabel>
-                <Input id="stock" type="number" {...form.register('stock')} />
+                <Input
+                  id="stock"
+                  type="number"
+                  min={0}
+                  step={isCartonForm ? 1 : "any"}
+                  placeholder="0"
+                  {...form.register("stock")}
+                />
                 {form.formState.errors.stock && (
                   <p className="text-xs text-destructive mt-1">
                     {form.formState.errors.stock.message}
@@ -402,7 +427,7 @@ export default function Products() {
                 Cancel
               </Button>
               <Button type="submit">
-                {editingProduct ? 'Update' : 'Add'} Product
+                {editingProduct ? "Update" : "Add"} Product
               </Button>
             </div>
           </form>

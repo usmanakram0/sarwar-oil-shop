@@ -2,8 +2,10 @@ import {
   signInSupabaseIfOnline,
   signOutSupabase,
   signUpSupabaseIfOnline,
+  reconnectSupabaseFromLocalSession,
 } from '@/lib/supabase/authBridge';
 import { clearStorageCache } from '@/lib/storage';
+import { readJsonValue, safeSetItem } from '@/lib/persistence/safeLocalStore';
 import { markTenantDataDirty } from '@/lib/offline/syncMeta';
 import { runSyncIfNeeded } from '@/lib/offline/syncEngine';
 
@@ -55,9 +57,11 @@ interface PasswordResetToken {
 }
 
 const USERS_KEY = 'oilshop_users';
+const USERS_BACKUP_KEY = 'oilshop_users__bak';
 const SESSION_KEY = 'oilshop_session';
 const RESET_TOKENS_KEY = 'oilshop_reset_tokens';
-const SESSION_DAYS = 7;
+const SESSION_DAYS = 30;
+const SESSION_RENEW_IF_WITHIN_DAYS = 7;
 const RESET_HOURS = 24;
 
 export const AUTH_CHANGED_EVENT = 'oilshop-auth-changed';
@@ -67,23 +71,48 @@ function notifyAuthChanged(): void {
 }
 
 function loadUsers(): AuthUser[] {
-  try {
-    const raw = localStorage.getItem(USERS_KEY);
-    if (raw) return JSON.parse(raw) as AuthUser[];
-  } catch {
-    /* ignore */
+  const raw = localStorage.getItem(USERS_KEY);
+  if (!raw) {
+    const seeded = [...SEED_USERS];
+    safeSetItem(USERS_KEY, JSON.stringify(seeded));
+    return seeded;
   }
-  const seeded = SEED_USERS;
-  localStorage.setItem(USERS_KEY, JSON.stringify(seeded));
-  return seeded;
+
+  const parsed = readJsonValue<AuthUser[]>(USERS_KEY, []);
+  if (Array.isArray(parsed) && parsed.length > 0) {
+    return parsed;
+  }
+
+  const backup = readJsonValue<AuthUser[]>(USERS_BACKUP_KEY, []);
+  if (Array.isArray(backup) && backup.length > 0) {
+    safeSetItem(USERS_KEY, JSON.stringify(backup));
+    return backup;
+  }
+
+  return [];
 }
 
 function saveUsers(users: AuthUser[]): void {
-  localStorage.setItem(USERS_KEY, JSON.stringify(users));
+  safeSetItem(USERS_KEY, JSON.stringify(users));
 }
 
 export function initializeAuth(): void {
   loadUsers();
+}
+
+function renewSessionIfNeeded(session: AuthSession): AuthSession {
+  const expiresAtMs = new Date(session.expiresAt).getTime();
+  const renewWithinMs = SESSION_RENEW_IF_WITHIN_DAYS * 24 * 60 * 60 * 1000;
+  if (expiresAtMs - Date.now() > renewWithinMs) {
+    return session;
+  }
+
+  const renewed: AuthSession = {
+    ...session,
+    expiresAt: new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000).toISOString(),
+  };
+  safeSetItem(SESSION_KEY, JSON.stringify(renewed));
+  return renewed;
 }
 
 export function getSession(): AuthSession | null {
@@ -95,7 +124,7 @@ export function getSession(): AuthSession | null {
       localStorage.removeItem(SESSION_KEY);
       return null;
     }
-    return session;
+    return renewSessionIfNeeded(session);
   } catch {
     return null;
   }
@@ -170,7 +199,7 @@ export async function register(data: {
     phone: user.phone,
     expiresAt: new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000).toISOString(),
   };
-  localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  safeSetItem(SESSION_KEY, JSON.stringify(session));
   notifyAuthChanged();
   clearStorageCache();
   markTenantDataDirty();
@@ -235,7 +264,7 @@ export async function login(
     phone: user.phone,
     expiresAt: new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000).toISOString(),
   };
-  localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  safeSetItem(SESSION_KEY, JSON.stringify(session));
   notifyAuthChanged();
   clearStorageCache();
   markTenantDataDirty();
@@ -293,7 +322,7 @@ export function updateProfile(updates: {
     lastName,
     phone,
   };
-  localStorage.setItem(SESSION_KEY, JSON.stringify(updatedSession));
+  safeSetItem(SESSION_KEY, JSON.stringify(updatedSession));
   notifyAuthChanged();
   return { success: true, session: updatedSession };
 }
@@ -373,4 +402,23 @@ function generateId(): string {
 
 export function isAuthenticated(): boolean {
   return getSession() !== null;
+}
+
+/** Reconnect Supabase using stored local credentials (same email/password). */
+export async function reconnectCloudSession(): Promise<{
+  ok: boolean;
+  message?: string;
+}> {
+  const session = getSession();
+  if (!session) {
+    return { ok: false, message: 'Sign in to the app first' };
+  }
+
+  const users = loadUsers();
+  const user = users.find((u) => u.id === session.userId);
+  if (!user) {
+    return { ok: false, message: 'Local user not found — sign in again' };
+  }
+
+  return reconnectSupabaseFromLocalSession(user.email, user.password);
 }

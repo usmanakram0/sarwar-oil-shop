@@ -11,6 +11,8 @@ export default function SyncStatusBanner() {
     !isOnline ||
     status === 'syncing' ||
     status === 'error' ||
+    status === 'offline' ||
+    status === 'no-auth' ||
     pendingChanges;
 
   if (!show) return null;
@@ -19,18 +21,24 @@ export default function SyncStatusBanner() {
   let text = message ?? 'All changes saved locally';
   let tone = 'bg-muted/80 text-muted-foreground border-border';
 
-  if (!isOnline || status === 'offline') {
+  if (!isOnline) {
     icon = <CloudOff className="w-3.5 h-3.5 shrink-0" />;
-    text = 'Offline — working from local storage';
+    text = message ?? 'Offline — working from local storage';
     tone = 'bg-amber-500/10 text-amber-900 dark:text-amber-100 border-amber-500/20';
   } else if (status === 'syncing') {
     icon = <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" />;
-    text = message ?? 'Syncing to cloud…';
+    text = message ?? 'Uploading local data to cloud…';
     tone = 'bg-primary/10 text-primary border-primary/20';
   } else if (status === 'error') {
     icon = <AlertCircle className="w-3.5 h-3.5 shrink-0" />;
-    text = message ?? 'Cloud sync failed';
+    text = message ?? 'Cloud upload failed — your shop data is still saved on this device';
     tone = 'bg-destructive/10 text-destructive border-destructive/20';
+  } else if (status === 'offline') {
+    icon = <Cloud className="w-3.5 h-3.5 shrink-0" />;
+    text =
+      message ??
+      'Cloud upload waiting for a stable connection — your data is safe on this device';
+    tone = 'bg-amber-500/10 text-amber-900 dark:text-amber-100 border-amber-500/20';
   } else if (status === 'no-auth' && pendingChanges) {
     icon = <CloudOff className="w-3.5 h-3.5 shrink-0" />;
     text =
@@ -38,7 +46,7 @@ export default function SyncStatusBanner() {
       'Cloud sign-in required — sign out, then sign in with the same email/password as Supabase Auth';
     tone = 'bg-amber-500/10 text-amber-900 dark:text-amber-100 border-amber-500/20';
   } else if (pendingChanges) {
-    text = 'Local changes pending — will sync when online';
+    text = message ?? 'Local changes pending — will upload to cloud when ready';
     tone = 'bg-muted/80 text-muted-foreground border-border';
   }
 

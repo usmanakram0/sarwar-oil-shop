@@ -21,7 +21,7 @@ import { queryKeys } from '@/lib/query/keys';
 import { safeArray, safeQueryFn } from '@/lib/query/safe';
 
 const OFFLINE_QUERY_OPTIONS = {
-  networkMode: 'always' as const,
+  networkMode: 'offlineFirst' as const,
   retry: false as const,
   refetchOnWindowFocus: false as const,
   refetchOnReconnect: false as const,

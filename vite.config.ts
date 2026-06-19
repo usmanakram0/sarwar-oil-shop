@@ -38,6 +38,16 @@ export default defineConfig(({ mode }) => ({
       },
       workbox: {
         globPatterns: ["**/*.{js,css,html,ico,png,svg}"],
+        navigateFallbackDenylist: [/^https?:\/\//],
+        runtimeCaching: [
+          {
+            urlPattern: /^https:\/\/.*\.supabase\.co\/.*/i,
+            handler: "NetworkOnly",
+            options: {
+              cacheName: "supabase-api",
+            },
+          },
+        ],
       },
     }),
   ].filter(Boolean),

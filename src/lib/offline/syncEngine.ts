@@ -25,6 +25,12 @@ import {
   isTenantDataDirty,
   markTenantDataDirty,
 } from '@/lib/offline/syncMeta';
+import {
+  formatCloudSyncError,
+  isRetryableNetworkError,
+  waitForNetworkReady,
+  withNetworkRetry,
+} from '@/lib/offline/network';
 
 const CHUNK = 80;
 
@@ -34,8 +40,10 @@ async function upsertChunk(
   onConflict: string = 'id,tenant_id'
 ): Promise<void> {
   if (!supabase || rows.length === 0) return;
-  const { error } = await supabase.from(table).upsert(rows, { onConflict });
-  if (error) throw new Error(`${table}: ${error.message}`);
+  await withNetworkRetry(async () => {
+    const { error } = await supabase!.from(table).upsert(rows, { onConflict });
+    if (error) throw new Error(`${table}: ${error.message}`);
+  });
 }
 
 function chunk<T>(arr: T[], size: number): T[][] {
@@ -196,17 +204,38 @@ export async function pushLocalDataToSupabase(): Promise<{
     return { ok: false, message: 'Offline' };
   }
 
+  const networkReady = await waitForNetworkReady();
+  if (!networkReady) {
+    emitSyncStatus({
+      state: 'offline',
+      message: 'Internet not ready yet — local data is safe, will retry upload',
+    });
+    return { ok: false, message: 'Internet not ready' };
+  }
+
   const session = getSession();
   if (!session) {
     emitSyncStatus({ state: 'no-auth', message: 'Sign in to sync' });
     return { ok: false, message: 'Not logged in' };
   }
 
-  const { data: authData } = await supabase.auth.getSession();
-  if (!authData.session) {
+  let hasCloudAuth = false;
+  try {
+    const { data: authData } = await supabase.auth.getSession();
+    hasCloudAuth = Boolean(authData.session);
+  } catch {
+    hasCloudAuth = false;
+  }
+
+  if (!hasCloudAuth) {
     const reconnect = await reconnectCloudSession();
-    const { data: retryAuth } = await supabase.auth.getSession();
-    if (!retryAuth.session) {
+    try {
+      const { data: retryAuth } = await supabase.auth.getSession();
+      hasCloudAuth = Boolean(retryAuth.session);
+    } catch {
+      hasCloudAuth = false;
+    }
+    if (!hasCloudAuth) {
       emitSyncStatus({
         state: 'no-auth',
         message:
@@ -270,8 +299,14 @@ export async function pushLocalDataToSupabase(): Promise<{
     emitSyncStatus({ state: 'success', message: 'Synced to cloud', lastSyncedAt });
     return { ok: true, message: 'Synced' };
   } catch (e) {
-    const message = e instanceof Error ? e.message : 'Sync failed';
-    emitSyncStatus({ state: 'error', message });
+    const tableMatch =
+      e instanceof Error ? e.message.match(/^([a-z_]+):/) : null;
+    const table = tableMatch?.[1];
+    const message = formatCloudSyncError(e, table);
+    emitSyncStatus({
+      state: isRetryableNetworkError(e) ? 'offline' : 'error',
+      message,
+    });
     return { ok: false, message };
   } finally {
     syncInFlight = false;

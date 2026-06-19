@@ -22,6 +22,11 @@ export const THERMAL_PRINT_STYLES = `
     margin: 0 auto;
     padding: 8px 10px 12px;
     line-height: 1.5;
+    white-space: nowrap;
+  }
+
+  .receipt-container table {
+    white-space: nowrap;
   }
 
   .header {
@@ -35,12 +40,14 @@ export const THERMAL_PRINT_STYLES = `
     font-weight: 900;
     line-height: 1.25;
     letter-spacing: 0.02em;
+    white-space: nowrap;
   }
 
   .header p {
     margin: 0;
     font-size: 14px;
     line-height: 1.45;
+    white-space: nowrap;
   }
 
   .header-address {
@@ -59,6 +66,7 @@ export const THERMAL_PRINT_STYLES = `
     font-size: 14px;
     font-weight: 700;
     vertical-align: top;
+    white-space: nowrap;
   }
 
   .title-row td:last-child {
@@ -71,6 +79,7 @@ export const THERMAL_PRINT_STYLES = `
     font-size: 18px;
     font-weight: 800;
     text-align: center;
+    white-space: nowrap;
   }
 
   .meta-table,
@@ -86,6 +95,7 @@ export const THERMAL_PRINT_STYLES = `
     font-size: 14px;
     vertical-align: top;
     text-align: left;
+    white-space: nowrap;
   }
 
   .meta-table td.label,
@@ -99,8 +109,8 @@ export const THERMAL_PRINT_STYLES = `
   .meta-table td.value,
   .totals-table td.value {
     width: 58%;
-    word-break: break-word;
     font-weight: 600;
+    white-space: nowrap;
   }
 
   .meta-table tr.uppercase .value {
@@ -115,7 +125,7 @@ export const THERMAL_PRINT_STYLES = `
   .products-table table {
     width: 100%;
     border-collapse: collapse;
-    table-layout: fixed;
+    table-layout: auto;
   }
 
   .products-table th,
@@ -125,9 +135,8 @@ export const THERMAL_PRINT_STYLES = `
     font-size: 14px;
     text-align: left;
     vertical-align: top;
-    word-wrap: break-word;
-    overflow-wrap: anywhere;
     line-height: 1.45;
+    white-space: nowrap;
   }
 
   .products-table th {
@@ -180,8 +189,8 @@ export const THERMAL_PRINT_STYLES = `
     margin: 6px 0 0;
     font-size: 13px;
     text-align: left;
-    word-break: break-word;
     line-height: 1.45;
+    white-space: nowrap;
   }
 
   .footer {
@@ -194,6 +203,7 @@ export const THERMAL_PRINT_STYLES = `
     font-size: 14px;
     font-weight: 600;
     line-height: 1.45;
+    white-space: nowrap;
   }
 
   hr {

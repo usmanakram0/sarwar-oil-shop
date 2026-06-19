@@ -31,6 +31,7 @@ interface SyncContextValue {
 const SyncContext = createContext<SyncContextValue | null>(null);
 
 const DEBOUNCE_MS = 2500;
+const ONLINE_SYNC_DELAY_MS = 4000;
 
 export function SyncProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<SyncStatusPayload['state']>(
@@ -50,14 +51,14 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     if (payload.lastSyncedAt) setLastSyncedAt(payload.lastSyncedAt);
   }, []);
 
-  const queueSync = useCallback(() => {
+  const queueSync = useCallback((delayMs = DEBOUNCE_MS) => {
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
       void runSyncIfNeeded().then(() => {
         setPendingChanges(isTenantDataDirty());
         setLastSyncedAt(getLastSyncedAt());
       });
-    }, DEBOUNCE_MS);
+    }, delayMs);
   }, []);
 
   const syncNow = useCallback(async () => {
@@ -78,7 +79,11 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     };
     const onOnline = () => {
       setIsOnline(true);
-      queueSync();
+      applyStatus({
+        state: 'idle',
+        message: 'Back online — local data is safe, cloud upload will retry shortly',
+      });
+      queueSync(ONLINE_SYNC_DELAY_MS);
     };
     const onOffline = () => {
       setIsOnline(false);
@@ -115,6 +120,19 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
   }, [applyStatus, queueSync]);
+
+  useEffect(() => {
+    if (!pendingChanges || !isOnline) return;
+    if (status !== 'offline' && status !== 'error') return;
+
+    const retryTimer = window.setInterval(() => {
+      if (navigator.onLine && isTenantDataDirty()) {
+        queueSync(1500);
+      }
+    }, 45000);
+
+    return () => window.clearInterval(retryTimer);
+  }, [pendingChanges, isOnline, status, queueSync]);
 
   const value = useMemo(
     () => ({

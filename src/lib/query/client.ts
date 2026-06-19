@@ -12,11 +12,11 @@ export const queryClient = new QueryClient({
       refetchOnWindowFocus: false,
       refetchOnReconnect: false,
       refetchOnMount: false,
-      networkMode: 'always',
+      networkMode: 'offlineFirst',
       retry: false,
     },
     mutations: {
-      networkMode: 'always',
+      networkMode: 'offlineFirst',
       retry: false,
     },
   },

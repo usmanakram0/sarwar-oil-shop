@@ -82,6 +82,10 @@ export default function Login() {
             <p className="font-medium text-foreground">Demo accounts</p>
             <p>admin@oilshop.com / admin123 (Store 1)</p>
             <p>demo@oilshop.com / demo123 (Store 2)</p>
+            <p className="pt-1">
+              New accounts: use <strong>Create one</strong>, or sign in with the
+              same email/password as Supabase Auth.
+            </p>
           </div>
         </CardContent>
       </Card>

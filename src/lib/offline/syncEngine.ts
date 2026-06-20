@@ -4,8 +4,10 @@ import { isSupabaseConfigured, supabase } from '@/lib/supabase/client';
 import {
   customerStorage,
   invoiceStorage,
+  isLocalTenantDataEmpty,
   paymentStorage,
   productStorage,
+  replaceTenantDataFromCloud,
   settingsStorage,
   stockPurchaseStorage,
   supplierPaymentStorage,
@@ -19,6 +21,10 @@ import {
   type Supplier,
   type SupplierPayment,
 } from '@/lib/storage';
+import {
+  countCloudSnapshotRecords,
+  fetchTenantSnapshotFromCloud,
+} from '@/lib/offline/cloudPull';
 import {
   clearTenantDataDirty,
   emitSyncStatus,
@@ -189,10 +195,7 @@ async function pushTable(
 
 let syncInFlight = false;
 
-/**
- * Push all local tenant data to Supabase (offline-first: local is source of truth).
- */
-export async function pushLocalDataToSupabase(): Promise<{
+async function ensureCloudAuthSession(): Promise<{
   ok: boolean;
   message?: string;
 }> {
@@ -208,7 +211,7 @@ export async function pushLocalDataToSupabase(): Promise<{
   if (!networkReady) {
     emitSyncStatus({
       state: 'offline',
-      message: 'Internet not ready yet — local data is safe, will retry upload',
+      message: 'Internet not ready yet — will retry shortly',
     });
     return { ok: false, message: 'Internet not ready' };
   }
@@ -249,6 +252,102 @@ export async function pushLocalDataToSupabase(): Promise<{
     }
   }
 
+  return { ok: true };
+}
+
+/**
+ * Download this account's shop data from Supabase into localStorage.
+ * By default only runs when local data is empty unless `force` is true.
+ */
+export async function pullLocalDataFromSupabase(options?: {
+  force?: boolean;
+}): Promise<{ ok: boolean; message?: string; recordCount?: number }> {
+  const auth = await ensureCloudAuthSession();
+  if (!auth.ok) return { ok: false, message: auth.message };
+
+  const force = options?.force === true;
+  if (!force && !isLocalTenantDataEmpty()) {
+    return {
+      ok: false,
+      message: 'Local shop data already exists on this device',
+    };
+  }
+
+  if (syncInFlight) {
+    return { ok: false, message: 'Sync already in progress' };
+  }
+
+  syncInFlight = true;
+  emitSyncStatus({
+    state: 'syncing',
+    message: force
+      ? 'Replacing local data from cloud…'
+      : 'Downloading shop data from cloud…',
+  });
+
+  try {
+    const snapshot = await fetchTenantSnapshotFromCloud();
+    const recordCount = countCloudSnapshotRecords(snapshot);
+
+    if (recordCount === 0) {
+      emitSyncStatus({
+        state: 'idle',
+        message: 'No cloud shop data found for this account yet',
+      });
+      return {
+        ok: true,
+        message: 'No cloud data found for this account',
+        recordCount: 0,
+      };
+    }
+
+    replaceTenantDataFromCloud(snapshot);
+
+    const lastPulledAt = new Date().toISOString();
+    localStorage.setItem('oilshop_last_pulled_at', lastPulledAt);
+    emitSyncStatus({
+      state: 'success',
+      message: `Downloaded ${recordCount} records from cloud`,
+      lastSyncedAt: getLastSyncedAt() ?? undefined,
+    });
+
+    return {
+      ok: true,
+      message: `Downloaded ${recordCount} records from cloud`,
+      recordCount,
+    };
+  } catch (e) {
+    const tableMatch =
+      e instanceof Error ? e.message.match(/^([a-z_]+):/) : null;
+    const table = tableMatch?.[1];
+    const message = formatCloudSyncError(e, table);
+    emitSyncStatus({
+      state: isRetryableNetworkError(e) ? 'offline' : 'error',
+      message,
+    });
+    return { ok: false, message };
+  } finally {
+    syncInFlight = false;
+  }
+}
+
+/** Auto-download cloud data for this account when local storage is empty. */
+export async function runPullIfNeeded(): Promise<void> {
+  if (!isSupabaseConfigured || !navigator.onLine || !getSession()) return;
+  if (!isLocalTenantDataEmpty()) return;
+  await pullLocalDataFromSupabase();
+}
+
+/**
+ * Push all local tenant data to Supabase (offline-first: local is source of truth).
+ */
+export async function pushLocalDataToSupabase(): Promise<{
+  ok: boolean;
+  message?: string;
+}> {
+  const auth = await ensureCloudAuthSession();
+  if (!auth.ok) return { ok: false, message: auth.message };
+
   if (syncInFlight) {
     return { ok: false, message: 'Sync already in progress' };
   }
@@ -256,6 +355,7 @@ export async function pushLocalDataToSupabase(): Promise<{
   syncInFlight = true;
   emitSyncStatus({ state: 'syncing', message: 'Uploading local data…' });
 
+  const session = getSession()!;
   const tenantId = session.tenantId;
 
   try {
@@ -334,4 +434,8 @@ export function scheduleSyncAfterLocalChange(): void {
 
 export function getLastSyncedAt(): string | null {
   return localStorage.getItem('oilshop_last_synced_at');
+}
+
+export function getLastPulledAt(): string | null {
+  return localStorage.getItem('oilshop_last_pulled_at');
 }

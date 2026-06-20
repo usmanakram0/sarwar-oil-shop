@@ -117,6 +117,26 @@ export const THERMAL_PRINT_STYLES = `
     text-transform: uppercase;
   }
 
+  .meta-table tr.amount-emphasis td {
+    font-size: 16px;
+    font-weight: 800;
+    padding-top: 4px;
+    padding-bottom: 4px;
+  }
+
+  .meta-table.payment-receipt-table td {
+    border: 1px solid #000;
+    padding: 5px 6px;
+    vertical-align: middle;
+  }
+
+  .meta-table.payment-receipt-table tr.amount-emphasis td {
+    font-size: 17px;
+    font-weight: 900;
+    padding-top: 6px;
+    padding-bottom: 6px;
+  }
+
   .products-table {
     width: 100%;
     margin: 6px 0;
@@ -222,12 +242,17 @@ function escapeHtml(value: string): string {
 }
 
 export function buildMetaTableRows(
-  rows: Array<{ label: string; value: string; uppercase?: boolean }>
+  rows: Array<{
+    label: string;
+    value: string;
+    uppercase?: boolean;
+    emphasize?: boolean;
+  }>
 ): string {
   return rows
     .map(
       (row) => `
-        <tr class="${row.uppercase ? 'uppercase' : ''}">
+        <tr class="${row.uppercase ? 'uppercase' : ''}${row.emphasize ? ' amount-emphasis' : ''}">
           <td class="label">${escapeHtml(row.label)}</td>
           <td class="value">${escapeHtml(row.value)}</td>
         </tr>`

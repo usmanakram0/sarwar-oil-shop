@@ -9,6 +9,9 @@ import {
   ArrowDownRight,
   Wallet,
   Plus,
+  Pencil,
+  Trash2,
+  Printer,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -38,7 +41,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { paymentStorage } from "@/lib/storage";
+import {
+  paymentStorage,
+  type Payment,
+  isManualLedgerEntry,
+} from "@/lib/storage";
 import { SHOP_NAME } from "@/lib/shop";
 import {
   CURRENCY,
@@ -46,7 +53,11 @@ import {
   formatMoneyWhole,
   formatMoneyWithSign,
 } from "@/lib/currency";
-import { formatDateInputValue, validateOrderDate } from "@/lib/historicalEntry";
+import {
+  formatDateInputValue,
+  validateOrderDate,
+  resolveOrderTimestamp,
+} from "@/lib/historicalEntry";
 import {
   buildLedgerCustomerList,
   filterLedgerCustomers,
@@ -68,9 +79,22 @@ import {
 } from "@/hooks/useShopMutations";
 import { usePagination } from "@/hooks/usePagination";
 import ListPagination from "@/components/ui/ListPagination";
+import ConfirmDeleteDialog from "@/components/ConfirmDeleteDialog";
 import { safeArray, safeString } from "@/lib/query/safe";
 import { format, parseISO, startOfDay, endOfDay } from "date-fns";
 import { toast } from "sonner";
+import {
+  buildLedgerPaymentReceiptHtml,
+  canPrintLedgerEntryReceipt,
+} from "@/lib/printing/ledgerPaymentReceipt";
+import { buildLedgerBalanceReceiptHtml } from "@/lib/printing/ledgerBalanceReceipt";
+import { printReceiptHtml } from "@/lib/printing/printService";
+
+function formatStatementBalance(amount: number): string {
+  if (amount === 0) return `${formatMoneyWhole(0)} (Settled)`;
+  if (amount > 0) return `${formatMoneyWhole(amount)} Due`;
+  return `${formatMoneyWhole(Math.abs(amount))} Advance`;
+}
 
 export default function Ledger() {
   const { customers } = useCustomersList();
@@ -78,7 +102,8 @@ export default function Ledger() {
   const { data: settings } = useSettingsQuery();
   const { data: allPayments = [] } = usePaymentsQuery();
   const { invoices } = useInvoicesList();
-  const { addLedgerEntry } = usePaymentMutations();
+  const { addLedgerEntry, updateManualEntry, deleteManualEntry } =
+    usePaymentMutations();
   const { create: createLedger } = useCustomerLedgerMutations();
   const cur = CURRENCY;
 
@@ -89,11 +114,23 @@ export default function Ledger() {
   const [createLedgerDialogOpen, setCreateLedgerDialogOpen] = useState(false);
   const [createLedgerCustomerId, setCreateLedgerCustomerId] = useState("");
   const [entryDialogOpen, setEntryDialogOpen] = useState(false);
+  const [editEntryDialogOpen, setEditEntryDialogOpen] = useState(false);
+  const [editingEntry, setEditingEntry] = useState<Payment | null>(null);
+  const [deleteEntryTarget, setDeleteEntryTarget] = useState<Payment | null>(
+    null,
+  );
   const [entryType, setEntryType] = useState<"debit" | "credit">("credit");
   const [entryAmount, setEntryAmount] = useState<number | "">("");
   const [entryNote, setEntryNote] = useState("");
   const [useOldDate, setUseOldDate] = useState(false);
   const [entryDate, setEntryDate] = useState(formatDateInputValue());
+  const [entryPaymentMethod, setEntryPaymentMethod] = useState<
+    "cash" | "card" | "credit"
+  >("cash");
+  const [printingEntryId, setPrintingEntryId] = useState<string | null>(null);
+  const [printingBalanceReceipt, setPrintingBalanceReceipt] = useState(false);
+  const [printReceiptPromptEntry, setPrintReceiptPromptEntry] =
+    useState<Payment | null>(null);
 
   const { data: balanceData } = useCustomerBalanceQuery(selectedCustomerId);
   const { data: customerPayments = [] } =
@@ -195,8 +232,169 @@ export default function Ledger() {
     setEntryAmount("");
     setEntryNote("");
     setEntryType("credit");
+    setEntryPaymentMethod("cash");
     setUseOldDate(false);
     setEntryDate(formatDateInputValue());
+  };
+
+  const resetEditEntryForm = () => {
+    setEditingEntry(null);
+    setEntryAmount("");
+    setEntryNote("");
+    setEntryPaymentMethod("cash");
+    setUseOldDate(false);
+    setEntryDate(formatDateInputValue());
+  };
+
+  const printLedgerEntryReceipt = useCallback(
+    async (entry: Payment) => {
+      if (!canPrintLedgerEntryReceipt(entry)) return;
+      if (!selectedCustomer) return;
+
+      setPrintingEntryId(entry.id);
+      try {
+        const paymentsForBalance = safeArray(customerPayments);
+        const hasEntry = paymentsForBalance.some(
+          (payment) => payment.id === entry.id,
+        );
+        const allCustomerPayments = hasEntry
+          ? paymentsForBalance
+          : [...paymentsForBalance, entry];
+
+        const isPendingEntry = entry.type === "debit";
+        const html = buildLedgerPaymentReceiptHtml({
+          shopName: SHOP_NAME,
+          shopAddress: safeString(settings?.shopAddress),
+          shopPhone: safeString(settings?.shopPhone),
+          thankYouMessage:
+            safeString(settings?.thankYouMessage) ||
+            (isPendingEntry
+              ? "Thank You for Your Business!"
+              : "Thank You for Your Payment!"),
+          customerName: selectedCustomer.name,
+          payment: entry,
+          allCustomerPayments,
+        });
+        await printReceiptHtml(html);
+        toast.success(
+          isPendingEntry
+            ? "Pending voucher ready to print"
+            : "Payment receipt ready to print",
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Print failed";
+        toast.error(message);
+      } finally {
+        setPrintingEntryId(null);
+      }
+    },
+    [selectedCustomer, settings, customerPayments],
+  );
+
+  const printBalanceReceipt = useCallback(async () => {
+    if (!selectedCustomer) return;
+
+    setPrintingBalanceReceipt(true);
+    try {
+      const html = buildLedgerBalanceReceiptHtml({
+        shopName: SHOP_NAME,
+        shopAddress: safeString(settings?.shopAddress),
+        shopPhone: safeString(settings?.shopPhone),
+        thankYouMessage:
+          safeString(settings?.thankYouMessage) ||
+          "Thank You for Your Business!",
+        customerName: selectedCustomer.name,
+        totalDebit: filteredTotals.debit,
+        totalCredit: filteredTotals.credit,
+        balance: filteredTotals.balance,
+        dateFrom: dateFrom || undefined,
+        dateTo: dateTo || undefined,
+      });
+      await printReceiptHtml(html);
+      toast.success("Balance receipt ready to print");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Print failed";
+      toast.error(message);
+    } finally {
+      setPrintingBalanceReceipt(false);
+    }
+  }, [selectedCustomer, settings, filteredTotals, dateFrom, dateTo]);
+
+  const openEditEntry = (entry: Payment) => {
+    setEditingEntry(entry);
+    setEntryAmount(entry.amount);
+    setEntryNote(entry.note);
+    setEntryType(entry.type);
+    setEntryPaymentMethod(entry.paymentMethod || "cash");
+    const entryDay = format(new Date(entry.createdAt), "yyyy-MM-dd");
+    const today = formatDateInputValue();
+    if (entryDay !== today) {
+      setUseOldDate(true);
+      setEntryDate(entryDay);
+    } else {
+      setUseOldDate(false);
+      setEntryDate(today);
+    }
+    setEditEntryDialogOpen(true);
+  };
+
+  const handleUpdateLedgerEntry = () => {
+    if (!editingEntry || !entryAmount || entryAmount <= 0) {
+      toast.error("Enter a valid amount");
+      return;
+    }
+    if (useOldDate) {
+      const dateCheck = validateOrderDate(entryDate);
+      if (!dateCheck.valid) {
+        toast.error(dateCheck.message || "Invalid entry date");
+        return;
+      }
+    }
+
+    const createdAt = useOldDate
+      ? resolveOrderTimestamp(entryDate)
+      : editingEntry.createdAt;
+
+    updateManualEntry.mutate(
+      {
+        id: editingEntry.id,
+        updates: {
+          amount: entryAmount,
+          note: entryNote,
+          createdAt,
+          paymentMethod:
+            editingEntry.type === "credit" ? entryPaymentMethod : undefined,
+        },
+      },
+      {
+        onSuccess: () => {
+          toast.success("Ledger entry updated");
+          setEditEntryDialogOpen(false);
+          resetEditEntryForm();
+        },
+        onError: (error) => {
+          const message =
+            error instanceof Error ? error.message : "Could not update entry";
+          toast.error(message);
+        },
+      },
+    );
+  };
+
+  const handleDeleteLedgerEntry = () => {
+    if (!deleteEntryTarget) return;
+
+    deleteManualEntry.mutate(deleteEntryTarget.id, {
+      onSuccess: () => {
+        toast.success("Ledger entry deleted");
+        setDeleteEntryTarget(null);
+      },
+      onError: (error) => {
+        const message =
+          error instanceof Error ? error.message : "Could not delete entry";
+        toast.error(message);
+      },
+    });
   };
 
   const handleCreateLedger = () => {
@@ -248,8 +446,12 @@ export default function Ledger() {
       ? {
           orderDate: entryDate,
           applyToInvoices: entryType === "credit" ? false : undefined,
+          paymentMethod:
+            entryType === "credit" ? entryPaymentMethod : undefined,
         }
-      : undefined;
+      : entryType === "credit"
+        ? { paymentMethod: entryPaymentMethod }
+        : undefined;
 
     addLedgerEntry.mutate(
       {
@@ -261,13 +463,16 @@ export default function Ledger() {
         options,
       },
       {
-        onSuccess: () => {
+        onSuccess: (created: Payment) => {
           const label = entryType === "debit" ? "Pending amount" : "Payment";
           toast.success(
             `${label} of ${formatMoney(Number(entryAmount))} recorded`,
           );
           resetEntryForm();
           setEntryDialogOpen(false);
+          if (canPrintLedgerEntryReceipt(created)) {
+            setPrintReceiptPromptEntry(created);
+          }
         },
         onError: () => toast.error("Could not add ledger entry"),
       },
@@ -308,8 +513,8 @@ export default function Ledger() {
         runningBalance += debit - credit;
         const balStr =
           runningBalance !== 0
-            ? `${formatMoneyWhole(Math.abs(runningBalance))} ${runningBalance > 0 ? "De" : "Cr"}`
-            : "0";
+            ? formatStatementBalance(runningBalance)
+            : formatMoneyWhole(0);
         return `
         <tr>
           <td style="border:1px solid #000;padding:6px">${formattedDate(entry.createdAt)}</td>
@@ -323,6 +528,8 @@ export default function Ledger() {
       })
       .join("");
 
+    const balanceSummary = formatStatementBalance(netBalance);
+
     const html = `<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
 <style>
@@ -333,13 +540,18 @@ export default function Ledger() {
   th { text-align:left; border:1px solid #000; padding:6px; background:#f0f0f0; }
   td { border:1px solid #000; padding:6px; }
   .meta { font-size:14px; margin-bottom:4px; }
+  .summary-table { width:100%; max-width:420px; margin:0 auto 16px; }
+  .summary-table td { padding:8px 10px; font-size:15px; }
+  .summary-table td.label { font-weight:700; width:55%; }
+  .summary-table td.value { font-weight:600; text-align:right; }
+  .summary-table tr.balance-row td { font-size:17px; font-weight:800; }
 </style>
 </head><body>
   <div style="text-align:center;margin-bottom:12px">
     <h2>${shopName}</h2>
     ${shopAddress ? `<p style="margin:2px 0;font-size:14px">${shopAddress}</p>` : ""}
     ${shopPhone ? `<p style="margin:2px 0;font-size:14px">Mobile: ${shopPhone}</p>` : ""}
-    <p style="margin:4px 0"><strong style="font-size:20px">Ledger Report</strong></p>
+    <p style="margin:4px 0"><strong style="font-size:20px">Ledger Statement</strong></p>
   </div>
   <p class="meta"><strong>Issue Date:</strong> <span style="text-decoration:underline">${issueDate}</span></p>
   <p class="meta"><strong>A/C Name:</strong> <span style="text-decoration:underline;text-transform:uppercase">${accountName.toUpperCase()}</span></p>
@@ -348,8 +560,21 @@ export default function Ledger() {
       <p class="meta"><strong>From Date:</strong> <span style="text-decoration:underline">${dateFrom ? formattedDate(dateFrom) : "-- / --"}</span></p>
       <p class="meta"><strong>To Date:</strong> <span style="text-decoration:underline">${dateTo ? formattedDate(dateTo) : "-- / --"}</span></p>
     </div>
-    <p class="meta"><strong>Total:</strong> <span style="text-decoration:underline">${netBalance !== 0 ? formatMoneyWhole(Math.abs(netBalance)) + " " + (netBalance > 0 ? "De" : "Cr") : "0"}</span></p>
   </div>
+  <table class="summary-table">
+    <tr>
+      <td class="label">Total Pending</td>
+      <td class="value">${formatMoneyWhole(totalDebit)}</td>
+    </tr>
+    <tr>
+      <td class="label">Total Paid</td>
+      <td class="value">${formatMoneyWhole(totalCredit)}</td>
+    </tr>
+    <tr class="balance-row">
+      <td class="label">Balance</td>
+      <td class="value">${balanceSummary}</td>
+    </tr>
+  </table>
   <table>
     <thead>
       <tr>
@@ -362,11 +587,11 @@ export default function Ledger() {
       <tr>
         <td style="border:1px solid #000;padding:4px"></td>
         <td style="border:1px solid #000;padding:4px"></td>
-        <td style="border:1px solid #000;padding:4px;font-size:16px;font-weight:600;text-align:center">Balance</td>
+        <td style="border:1px solid #000;padding:4px;font-size:16px;font-weight:600;text-align:center">Totals</td>
         <td style="border:1px solid #000;padding:4px;font-weight:600">${formatMoneyWhole(totalDebit)}</td>
-        <td style="border:1px solid #000;padding:4px;font-weight:600">${formatMoneyWhole(totalCredit)} Cr</td>
-        <td style="border:1px solid #000;padding:4px;font-weight:600">${formatMoneyWhole(totalDebit)} De</td>
-        <td style="border:1px solid #000;padding:4px;font-weight:600">${netBalance !== 0 ? formatMoneyWhole(Math.abs(netBalance)) + " " + (netBalance > 0 ? "De" : "Cr") : "0"}</td>
+        <td style="border:1px solid #000;padding:4px;font-weight:600">${formatMoneyWhole(totalCredit)}</td>
+        <td style="border:1px solid #000;padding:4px;font-weight:600">${formatMoneyWhole(totalDebit)}</td>
+        <td style="border:1px solid #000;padding:4px;font-weight:800">${balanceSummary}</td>
       </tr>
     </tbody>
   </table>
@@ -440,7 +665,7 @@ export default function Ledger() {
                   <CardContent className="pt-4 pb-4">
                     <div className="flex items-center justify-between">
                       <div>
-                        <p className="font-heading font-semibold">
+                        <p className="font-heading font-semibold capitalize">
                           {displayName}
                         </p>
                         {customer?.phone && (
@@ -513,7 +738,7 @@ export default function Ledger() {
               <div className="flex items-center justify-between flex-wrap gap-3">
                 <div>
                   <div className="flex items-center gap-2">
-                    <h2 className="text-xl font-heading font-bold">
+                    <h2 className="text-xl font-heading font-bold capitalize">
                       {selectedCustomer?.name}
                     </h2>
                     <Button
@@ -543,16 +768,33 @@ export default function Ledger() {
                   <Button
                     size="sm"
                     variant="outline"
+                    onClick={() => void printBalanceReceipt()}
+                    disabled={
+                      ledgerEntries.length === 0 || printingBalanceReceipt
+                    }>
+                    <Printer className="w-4 h-4 mr-1" />
+                    Print Balance
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
                     onClick={() => {
                       setAccountNameError("");
                       setPdfModalOpen(true);
                     }}
                     disabled={ledgerEntries.length === 0}>
                     <Download className="w-4 h-4 mr-1" />
-                    Export PDF
+                    Print Statement
                   </Button>
                 </div>
               </div>
+              {/* <p className="text-xs text-muted-foreground mt-3 pt-3 border-t border-primary/10">
+                <strong className="text-foreground">Two print options:</strong>{" "}
+                Use <strong>Receipt</strong> on a payment row for a small
+                thermal slip when the customer pays. Use{" "}
+                <strong>Print Statement</strong> for the full account history
+                (PDF).
+              </p> */}
             </CardContent>
           </Card>
 
@@ -682,6 +924,9 @@ export default function Ledger() {
                             Credit
                           </TableHead>
                           <TableHead className="w-[90px]">Invoice</TableHead>
+                          <TableHead className="w-[100px] text-right">
+                            Print
+                          </TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -693,12 +938,12 @@ export default function Ledger() {
                             <TableCell className="text-sm">
                               {entry.note}
                             </TableCell>
-                            <TableCell className="text-right text-sm font-medium text-destructive">
+                            <TableCell className="whitespace-nowrap text-right text-sm font-medium text-destructive">
                               {entry.type === "debit"
                                 ? formatMoney(entry.amount)
                                 : ""}
                             </TableCell>
-                            <TableCell className="text-right text-sm font-medium text-success">
+                            <TableCell className="whitespace-nowrap text-right text-sm font-medium text-success">
                               {entry.type === "credit"
                                 ? formatMoney(entry.amount)
                                 : ""}
@@ -713,6 +958,48 @@ export default function Ledger() {
                               ) : (
                                 "-"
                               )}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <div className="flex items-center justify-end gap-1 flex-nowrap">
+                                {canPrintLedgerEntryReceipt(entry) ? (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-8 text-xs px-2 flex items-center"
+                                    onClick={() =>
+                                      printLedgerEntryReceipt(entry)
+                                    }
+                                    disabled={printingEntryId === entry.id}>
+                                    <Printer className="w-3.5 h-3.5" />
+                                  </Button>
+                                ) : (
+                                  <span className="text-xs text-muted-foreground px-1">
+                                    —
+                                  </span>
+                                )}
+                                {isManualLedgerEntry(entry) && (
+                                  <>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-8 w-8"
+                                      onClick={() => openEditEntry(entry)}
+                                      aria-label="Edit entry">
+                                      <Pencil className="w-4 h-4" />
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-8 w-8 text-destructive"
+                                      onClick={() =>
+                                        setDeleteEntryTarget(entry)
+                                      }
+                                      aria-label="Delete entry">
+                                      <Trash2 className="w-4 h-4" />
+                                    </Button>
+                                  </>
+                                )}
+                              </div>
                             </TableCell>
                           </TableRow>
                         ))}
@@ -898,6 +1185,25 @@ export default function Ledger() {
                 onChange={(e) => setEntryNote(e.target.value)}
               />
             </div>
+            {entryType === "credit" && (
+              <div>
+                <FormLabel required>Payment Method</FormLabel>
+                <Select
+                  value={entryPaymentMethod}
+                  onValueChange={(value) =>
+                    setEntryPaymentMethod(value as "cash" | "card" | "credit")
+                  }>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="cash">Cash</SelectItem>
+                    <SelectItem value="card">Card</SelectItem>
+                    <SelectItem value="credit">Credit</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div className="flex items-start gap-3 rounded-lg border border-dashed border-amber-400/50 p-3">
               <input
                 id="ledger-old-date"
@@ -939,6 +1245,154 @@ export default function Ledger() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Edit Ledger Entry Dialog */}
+      <Dialog
+        open={editEntryDialogOpen}
+        onOpenChange={(open) => {
+          setEditEntryDialogOpen(open);
+          if (!open) resetEditEntryForm();
+        }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="font-heading">
+              Edit Ledger Entry - {selectedCustomer?.name}
+            </DialogTitle>
+          </DialogHeader>
+          {editingEntry && (
+            <div className="space-y-4">
+              <div>
+                <FormLabel>Entry type</FormLabel>
+                <p className="text-sm mt-1">
+                  {editingEntry.type === "debit"
+                    ? "Pending Amount (Debit)"
+                    : "Receive Amount (Credit)"}
+                </p>
+              </div>
+              <div>
+                <FormLabel required>Amount ({cur})</FormLabel>
+                <Input
+                  type="number"
+                  min="0"
+                  placeholder="Enter amount"
+                  value={entryAmount}
+                  onChange={(e) =>
+                    setEntryAmount(
+                      e.target.value === "" ? "" : Number(e.target.value),
+                    )
+                  }
+                  autoFocus
+                />
+              </div>
+              <div>
+                <FormLabel>Description</FormLabel>
+                <Input
+                  placeholder="Entry description"
+                  value={entryNote}
+                  onChange={(e) => setEntryNote(e.target.value)}
+                />
+              </div>
+              {editingEntry.type === "credit" && (
+                <div>
+                  <FormLabel required>Payment Method</FormLabel>
+                  <Select
+                    value={entryPaymentMethod}
+                    onValueChange={(value) =>
+                      setEntryPaymentMethod(value as "cash" | "card" | "credit")
+                    }>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="cash">Cash</SelectItem>
+                      <SelectItem value="card">Card</SelectItem>
+                      <SelectItem value="credit">Credit</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              <div className="flex items-start gap-3 rounded-lg border border-dashed border-amber-400/50 p-3">
+                <input
+                  id="ledger-edit-old-date"
+                  type="checkbox"
+                  checked={useOldDate}
+                  onChange={(e) => setUseOldDate(e.target.checked)}
+                  className="mt-1"
+                />
+                <div className="space-y-2 flex-1">
+                  <Label
+                    htmlFor="ledger-edit-old-date"
+                    className="cursor-pointer">
+                    Entry from old records (use past date)
+                  </Label>
+                  {useOldDate && (
+                    <div>
+                      <FormLabel className="text-xs" required>
+                        Entry date
+                      </FormLabel>
+                      <Input
+                        type="date"
+                        max={formatDateInputValue()}
+                        value={entryDate}
+                        onChange={(e) => setEntryDate(e.target.value)}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+              {editingEntry.type === "credit" &&
+                !editingEntry.skipInvoiceAllocation && (
+                  <p className="text-xs text-muted-foreground">
+                    Changing the amount will adjust how this payment is applied
+                    to pending orders.
+                  </p>
+                )}
+              <div className="flex gap-2 justify-end">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setEditEntryDialogOpen(false);
+                    resetEditEntryForm();
+                  }}>
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleUpdateLedgerEntry}
+                  disabled={updateManualEntry.isPending}>
+                  Save Changes
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <ConfirmDeleteDialog
+        open={Boolean(deleteEntryTarget)}
+        onOpenChange={(open) => {
+          if (!open) setDeleteEntryTarget(null);
+        }}
+        title="Delete ledger entry?"
+        description={
+          deleteEntryTarget ? (
+            <span>
+              Remove{" "}
+              <strong>
+                {deleteEntryTarget.type === "debit"
+                  ? "pending amount"
+                  : "payment"}{" "}
+                of {formatMoney(deleteEntryTarget.amount)}
+              </strong>
+              {deleteEntryTarget.note ? ` (${deleteEntryTarget.note})` : ""}?
+              This cannot be undone.
+            </span>
+          ) : (
+            ""
+          )
+        }
+        onConfirm={handleDeleteLedgerEntry}
+        isLoading={deleteManualEntry.isPending}
+      />
 
       {/* Create Ledger Dialog */}
       <Dialog
@@ -1007,7 +1461,77 @@ export default function Ledger() {
         </DialogContent>
       </Dialog>
 
-      {/* Export PDF Dialog */}
+      {/* Print ledger entry receipt prompt */}
+      <Dialog
+        open={Boolean(printReceiptPromptEntry)}
+        onOpenChange={(open) => {
+          if (!open) setPrintReceiptPromptEntry(null);
+        }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="font-heading">
+              {printReceiptPromptEntry?.type === "debit"
+                ? "Pending amount saved — print voucher?"
+                : "Payment saved — print receipt?"}
+            </DialogTitle>
+          </DialogHeader>
+          {printReceiptPromptEntry && (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                {printReceiptPromptEntry.type === "debit"
+                  ? "A small thermal voucher for the customer. Shows pending amount and balance before/after."
+                  : "A small thermal receipt for the customer. Shows amount paid, payment method, and balance before/after."}
+              </p>
+              <div className="rounded-lg border bg-muted/30 p-3 text-sm space-y-1">
+                <p>
+                  <span className="text-muted-foreground">Customer:</span>{" "}
+                  {selectedCustomer?.name}
+                </p>
+                <p>
+                  <span className="text-muted-foreground">
+                    {printReceiptPromptEntry.type === "debit"
+                      ? "Pending:"
+                      : "Amount:"}
+                  </span>{" "}
+                  <strong
+                    className={
+                      printReceiptPromptEntry.type === "debit"
+                        ? "text-destructive"
+                        : "text-success"
+                    }>
+                    {formatMoney(printReceiptPromptEntry.amount)}
+                  </strong>
+                </p>
+                <p>
+                  <span className="text-muted-foreground">Date:</span>{" "}
+                  {format(
+                    new Date(printReceiptPromptEntry.createdAt),
+                    "dd MMM yyyy",
+                  )}
+                </p>
+              </div>
+              <div className="flex gap-2 justify-end">
+                <Button
+                  variant="outline"
+                  onClick={() => setPrintReceiptPromptEntry(null)}>
+                  Not now
+                </Button>
+                <Button
+                  onClick={() => {
+                    void printLedgerEntryReceipt(printReceiptPromptEntry);
+                    setPrintReceiptPromptEntry(null);
+                  }}
+                  disabled={printingEntryId === printReceiptPromptEntry.id}>
+                  <Printer className="w-4 h-4 mr-1" />
+                  Print Receipt
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Ledger statement (full history PDF) */}
       <Dialog
         open={pdfModalOpen}
         onOpenChange={(open) => {
@@ -1020,17 +1544,51 @@ export default function Ledger() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="font-heading">
-              Export Ledger PDF
+              Print Ledger Statement
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="p-3 rounded-lg bg-muted/50 text-sm">
-              Generating ledger for: <strong>{selectedCustomer?.name}</strong>
-              {(dateFrom || dateTo) && (
-                <span className="text-muted-foreground ml-1">
-                  ({dateFrom || "start"} → {dateTo || "present"})
-                </span>
-              )}
+            <p className="text-sm text-muted-foreground">
+              Full account history for this customer — all debits, credits, and
+              running balance. Use this for records or giving a copy to the
+              customer. Not the same as a single payment receipt.
+            </p>
+            <div className="p-3 rounded-lg bg-muted/50 text-sm space-y-2">
+              <p>
+                Customer: <strong>{selectedCustomer?.name}</strong>
+                {(dateFrom || dateTo) && (
+                  <span className="text-muted-foreground ml-1">
+                    ({dateFrom || "start"} → {dateTo || "present"})
+                  </span>
+                )}
+              </p>
+              <div className="grid grid-cols-3 gap-2 pt-2 border-t text-xs">
+                <div>
+                  <span className="text-muted-foreground block">Pending</span>
+                  <strong>{formatMoney(filteredTotals.debit)}</strong>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block">Paid</span>
+                  <strong>{formatMoney(filteredTotals.credit)}</strong>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block">Balance</span>
+                  <strong
+                    className={
+                      filteredTotals.balance > 0
+                        ? "text-destructive"
+                        : filteredTotals.balance < 0
+                          ? "text-success"
+                          : ""
+                    }>
+                    {filteredTotals.balance > 0
+                      ? `${formatMoney(filteredTotals.balance)} Due`
+                      : filteredTotals.balance < 0
+                        ? `${formatMoney(Math.abs(filteredTotals.balance))} Advance`
+                        : formatMoney(0)}
+                  </strong>
+                </div>
+              </div>
             </div>
             <div>
               <FormLabel>A/C Name (appears on ledger)</FormLabel>
@@ -1052,11 +1610,18 @@ export default function Ledger() {
                 </p>
               )}
             </div>
-            <div className="flex gap-2 justify-end">
+            <div className="flex gap-2 justify-end flex-wrap">
+              <Button
+                variant="outline"
+                onClick={() => void printBalanceReceipt()}
+                disabled={printingBalanceReceipt}>
+                <Printer className="w-4 h-4 mr-1" />
+                Print Balance Receipt
+              </Button>
               <Button variant="outline" onClick={() => setPdfModalOpen(false)}>
                 Cancel
               </Button>
-              <Button onClick={printLedger}>Print &amp; Download</Button>
+              <Button onClick={printLedger}>Print Statement</Button>
             </div>
           </div>
         </DialogContent>

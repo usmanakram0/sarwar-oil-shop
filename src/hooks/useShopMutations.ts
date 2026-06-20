@@ -28,6 +28,7 @@ import {
 } from '@/lib/stockMovement';
 import { queryClient } from '@/lib/query/client';
 import { queryKeys } from '@/lib/query/keys';
+import { invalidateShopQueries } from '@/lib/query/invalidate';
 import {
   appendListItem,
   beginOptimisticUpdate,
@@ -98,6 +99,28 @@ function appendPaymentToCaches(payment: Payment, customerId: string): void {
         balance: prev.balance - payment.amount,
       };
     }
+  );
+}
+
+function removePaymentFromCaches(payment: Payment): void {
+  removeListItem<Payment>(queryKeys.payments, payment.id);
+  removeListItem<Payment>(queryKeys.customerPayments(payment.customerId), payment.id);
+  queryClient.setQueryData(
+    queryKeys.customerBalance(payment.customerId),
+    paymentStorage.getCustomerBalance(payment.customerId),
+  );
+}
+
+function replacePaymentInCaches(updated: Payment): void {
+  updateListItem<Payment>(queryKeys.payments, updated.id, () => updated);
+  updateListItem<Payment>(
+    queryKeys.customerPayments(updated.customerId),
+    updated.id,
+    () => updated,
+  );
+  queryClient.setQueryData(
+    queryKeys.customerBalance(updated.customerId),
+    paymentStorage.getCustomerBalance(updated.customerId),
   );
 }
 
@@ -649,7 +672,11 @@ export function usePaymentMutations() {
       amount: number;
       type: 'debit' | 'credit';
       note: string;
-      options?: { orderDate?: string; applyToInvoices?: boolean };
+      options?: {
+        orderDate?: string;
+        applyToInvoices?: boolean;
+        paymentMethod?: Payment['paymentMethod'];
+      };
     }) =>
       paymentStorage.addLedgerEntry(
         customerId,
@@ -659,7 +686,14 @@ export function usePaymentMutations() {
         note,
         options,
       ),
-    onMutate: async ({ customerId, customerName, amount, type, note, options }) => {
+    onMutate: async ({
+      customerId,
+      customerName,
+      amount,
+      type,
+      note,
+      options,
+    }) => {
       const ctx = await beginOptimisticUpdate([
         queryKeys.payments,
         queryKeys.customerPayments(customerId),
@@ -681,6 +715,8 @@ export function usePaymentMutations() {
           type,
           note: note.trim() || defaultNote,
           createdAt: resolveOrderTimestamp(options?.orderDate),
+          paymentMethod:
+            type === 'credit' ? options?.paymentMethod || 'cash' : undefined,
         },
         customerId,
       );
@@ -689,7 +725,85 @@ export function usePaymentMutations() {
     onError: (_e, _v, ctx) => rollbackOptimisticUpdate(ctx),
   });
 
-  return { addManualPayment, addHistoricalLedgerEntry, addLedgerEntry };
+  const updateManualEntry = useMutation({
+    mutationFn: ({
+      id,
+      updates,
+    }: {
+      id: string;
+      updates: {
+        amount?: number;
+        note?: string;
+        createdAt?: string;
+        paymentMethod?: Payment['paymentMethod'];
+      };
+    }) => {
+      const result = paymentStorage.updateManualEntry(id, updates);
+      if (!result) throw new Error('Entry not found or cannot be edited');
+      return result;
+    },
+    onMutate: async ({ id, updates }) => {
+      const existing = paymentStorage.getById(id);
+      if (!existing) return undefined;
+
+      const ctx = await beginOptimisticUpdate([
+        queryKeys.payments,
+        queryKeys.customerPayments(existing.customerId),
+        queryKeys.customerBalance(existing.customerId),
+        queryKeys.invoices,
+        queryKeys.dashboard,
+      ]);
+
+      const updated: Payment = {
+        ...existing,
+        amount: updates.amount ?? existing.amount,
+        note: updates.note?.trim() || existing.note,
+        createdAt: updates.createdAt ?? existing.createdAt,
+        paymentMethod: updates.paymentMethod ?? existing.paymentMethod,
+      };
+      replacePaymentInCaches(updated);
+      return ctx;
+    },
+    onSuccess: (updated) => {
+      replacePaymentInCaches(updated);
+      invalidateShopQueries(['payments', 'invoices', 'ledger']);
+    },
+    onError: (_e, _v, ctx) => rollbackOptimisticUpdate(ctx),
+  });
+
+  const deleteManualEntry = useMutation({
+    mutationFn: (id: string) => {
+      const removed = paymentStorage.deleteManualEntry(id);
+      if (!removed) throw new Error('Entry not found or cannot be deleted');
+      return removed;
+    },
+    onMutate: async (id) => {
+      const existing = paymentStorage.getById(id);
+      if (!existing) return undefined;
+
+      const ctx = await beginOptimisticUpdate([
+        queryKeys.payments,
+        queryKeys.customerPayments(existing.customerId),
+        queryKeys.customerBalance(existing.customerId),
+        queryKeys.invoices,
+        queryKeys.dashboard,
+      ]);
+      removePaymentFromCaches(existing);
+      return ctx;
+    },
+    onSuccess: () => {
+      invalidateShopQueries(['payments', 'invoices', 'ledger']);
+    },
+    onError: (_e, _v, ctx) => rollbackOptimisticUpdate(ctx),
+  });
+
+  return {
+    addManualPayment,
+    addHistoricalLedgerEntry,
+    addLedgerEntry,
+    updateManualEntry,
+    deleteManualEntry,
+  };
 }
 
 export function useCustomerLedgerMutations() {

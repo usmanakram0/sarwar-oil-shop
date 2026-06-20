@@ -17,7 +17,7 @@ import {
   type SyncStatusPayload,
   isTenantDataDirty,
 } from '@/lib/offline/syncMeta';
-import { getLastSyncedAt, pushLocalDataToSupabase, runSyncIfNeeded } from '@/lib/offline/syncEngine';
+import { getLastSyncedAt, pullLocalDataFromSupabase, pushLocalDataToSupabase, runPullIfNeeded, runSyncIfNeeded } from '@/lib/offline/syncEngine';
 
 interface SyncContextValue {
   status: SyncStatusPayload['state'];
@@ -26,6 +26,7 @@ interface SyncContextValue {
   pendingChanges: boolean;
   isOnline: boolean;
   syncNow: () => Promise<{ ok: boolean; message?: string }>;
+  pullFromCloud: (force?: boolean) => Promise<{ ok: boolean; message?: string; recordCount?: number }>;
 }
 
 const SyncContext = createContext<SyncContextValue | null>(null);
@@ -68,6 +69,13 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     return result;
   }, []);
 
+  const pullFromCloud = useCallback(async (force?: boolean) => {
+    const result = await pullLocalDataFromSupabase({ force });
+    setPendingChanges(isTenantDataDirty());
+    setLastSyncedAt(getLastSyncedAt());
+    return result;
+  }, []);
+
   useEffect(() => {
     const onStatus = (e: Event) => {
       const detail = (e as CustomEvent<SyncStatusPayload>).detail;
@@ -90,7 +98,10 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       applyStatus({ state: 'offline', message: 'Working offline — changes saved locally' });
     };
     const onAuth = () => {
-      if (navigator.onLine && isTenantDataDirty()) queueSync();
+      if (!navigator.onLine) return;
+      void runPullIfNeeded().then(() => {
+        if (isTenantDataDirty()) queueSync();
+      });
     };
 
     window.addEventListener(SYNC_STATUS_EVENT, onStatus);
@@ -104,6 +115,9 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     } else if (!navigator.onLine) {
       applyStatus({ state: 'offline' });
     } else if (getSession()) {
+      void runPullIfNeeded().then(() => {
+        if (isTenantDataDirty()) queueSync();
+      });
       void hasSupabaseSession().then(hasCloudSession => {
         if (!hasCloudSession && !isTenantDataDirty()) {
           applyStatus({ state: 'idle' });
@@ -142,8 +156,9 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       pendingChanges,
       isOnline,
       syncNow,
+      pullFromCloud,
     }),
-    [status, message, lastSyncedAt, pendingChanges, isOnline, syncNow]
+    [status, message, lastSyncedAt, pendingChanges, isOnline, syncNow, pullFromCloud]
   );
 
   return <SyncContext.Provider value={value}>{children}</SyncContext.Provider>;

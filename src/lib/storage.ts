@@ -1,6 +1,6 @@
 // Storage abstraction layer — offline-first; cloud sync via syncEngine
 import { getCurrentTenantId } from '@/lib/auth';
-import { markTenantDataDirty } from '@/lib/offline/syncMeta';
+import { clearTenantDataDirty, markTenantDataDirty } from '@/lib/offline/syncMeta';
 import {
   flushTenantAutosave,
   scheduleTenantAutosave,
@@ -119,6 +119,79 @@ export interface Payment {
   type: 'credit' | 'debit';  // credit = customer pays, debit = customer owes (invoice)
   note: string;
   createdAt: string;
+  /** Manual credit that should not adjust invoice paid amounts */
+  skipInvoiceAllocation?: boolean;
+  receiptNumber?: string;
+  paymentMethod?: 'cash' | 'card' | 'credit';
+}
+
+export function isManualLedgerEntry(payment: Payment): boolean {
+  return !payment.invoiceId;
+}
+
+function applyManualPaymentToInvoices(customerId: string, amount: number): void {
+  let remaining = amount;
+  const invoices = invoiceStorage
+    .getAll()
+    .filter(
+      (invoice) =>
+        invoice.customerId === customerId &&
+        (invoice.status === 'pending' || invoice.status === 'partial'),
+    )
+    .sort(
+      (a, b) =>
+        new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+    );
+
+  for (const invoice of invoices) {
+    if (remaining <= 0) break;
+    const invoiceRemaining = invoice.total - (invoice.paidAmount || 0);
+    if (invoiceRemaining <= 0) continue;
+    const payForThis = Math.min(remaining, invoiceRemaining);
+    const paidAmount = (invoice.paidAmount || 0) + payForThis;
+    const remainingAmount = invoice.total - paidAmount;
+    invoiceStorage.update(invoice.id, {
+      paidAmount,
+      remainingAmount,
+      status: remainingAmount <= 0 ? 'paid' : 'partial',
+    });
+    remaining -= payForThis;
+  }
+}
+
+function reverseManualPaymentAllocation(
+  customerId: string,
+  amount: number,
+): void {
+  let remaining = amount;
+  const invoices = invoiceStorage
+    .getAll()
+    .filter(
+      (invoice) =>
+        invoice.customerId === customerId && (invoice.paidAmount || 0) > 0,
+    )
+    .sort(
+      (a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    );
+
+  for (const invoice of invoices) {
+    if (remaining <= 0) break;
+    const paidAmount = invoice.paidAmount || 0;
+    const remove = Math.min(remaining, paidAmount);
+    const newPaidAmount = paidAmount - remove;
+    const remainingAmount = invoice.total - newPaidAmount;
+    let status: Invoice['status'] = 'pending';
+    if (newPaidAmount > 0) {
+      status = remainingAmount <= 0 ? 'paid' : 'partial';
+    }
+    invoiceStorage.update(invoice.id, {
+      paidAmount: newPaidAmount,
+      remainingAmount: Math.max(0, remainingAmount),
+      status,
+    });
+    remaining -= remove;
+  }
 }
 
 export interface CustomerLedger {
@@ -281,6 +354,15 @@ function generatePurchaseSlipNumber(orderDate?: string, manualNumber?: string): 
   return `PUR-${y}${m}${d}-${seq}`;
 }
 
+function generateLedgerReceiptNumber(orderDate?: string): string {
+  const ref = orderDate ? new Date(`${orderDate}T12:00:00`) : new Date();
+  const y = ref.getFullYear().toString().slice(-2);
+  const m = (ref.getMonth() + 1).toString().padStart(2, '0');
+  const d = ref.getDate().toString().padStart(2, '0');
+  const seq = (getAll<Payment>('payments').length + 1).toString().padStart(4, '0');
+  return `RCP-${y}${m}${d}-${seq}`;
+}
+
 function applyStockLines(
   lines: { productId: string; quantity: number }[],
   direction: 'in' | 'out',
@@ -326,6 +408,65 @@ function setAll<T>(key: string, data: T[]): void {
   if (scopes.length > 0) {
     invalidateShopQueries(scopes);
   }
+}
+
+function setAllSilent<T>(key: string, data: T[]): void {
+  const cacheKey = scopedKey(key);
+  safeSetItem(cacheKey, JSON.stringify(data));
+  listCache.set(cacheKey, data);
+  const scopes = storageKeyToScopes(key);
+  if (scopes.length > 0) {
+    invalidateShopQueries(scopes);
+  }
+}
+
+export interface TenantCloudSnapshot {
+  products: Product[];
+  customers: Customer[];
+  suppliers: Supplier[];
+  invoices: Invoice[];
+  payments: Payment[];
+  stockPurchases: StockPurchase[];
+  supplierPayments: SupplierPayment[];
+  settings: ShopSettings;
+}
+
+/** True when this tenant has no shop records saved locally yet. */
+export function isLocalTenantDataEmpty(): boolean {
+  try {
+    return (
+      productStorage.getAll().length === 0 &&
+      customerStorage.getAll().length === 0 &&
+      invoiceStorage.getAll().length === 0 &&
+      paymentStorage.getAll().length === 0 &&
+      stockPurchaseStorage.getAll().length === 0 &&
+      supplierStorage.getAll().length === 0
+    );
+  } catch {
+    return true;
+  }
+}
+
+/** Replace local tenant data from a cloud download without marking unsynced changes. */
+export function replaceTenantDataFromCloud(snapshot: TenantCloudSnapshot): void {
+  setAllSilent('products', snapshot.products);
+  setAllSilent('customers', snapshot.customers);
+  setAllSilent('suppliers', snapshot.suppliers);
+  setAllSilent('invoices', snapshot.invoices);
+  setAllSilent('payments', snapshot.payments);
+  setAllSilent('stockPurchases', snapshot.stockPurchases);
+  setAllSilent('supplierPayments', snapshot.supplierPayments);
+
+  const settingsKey = scopedKey('settings');
+  const settings = normalizeSettings(snapshot.settings);
+  safeSetItem(settingsKey, JSON.stringify(settings));
+  settingsCacheKey = settingsKey;
+  settingsCache = settings;
+
+  scheduleTenantAutosave(buildTenantAutosaveSnapshot);
+  flushTenantAutosave(buildTenantAutosaveSnapshot);
+  clearTenantDataDirty();
+  clearStorageCache();
 }
 
 function cascadeSupplierName(supplierId: string, newName: string): void {
@@ -630,6 +771,8 @@ export const invoiceStorage = {
         amount,
         type: 'credit',
         note: `Payment for ${inv.invoiceNumber}`,
+        receiptNumber: generateLedgerReceiptNumber(),
+        paymentMethod: inv.paymentMethod,
       });
     }
     return inv;
@@ -639,6 +782,8 @@ export const invoiceStorage = {
 // Payments (Ledger entries)
 export const paymentStorage = {
   getAll: (): Payment[] => getAll<Payment>('payments'),
+  getById: (id: string): Payment | undefined =>
+    getAll<Payment>('payments').find((payment) => payment.id === id),
   getByCustomer: (customerId: string): Payment[] =>
     getAll<Payment>('payments').filter(p => p.customerId === customerId),
   add: (payment: Omit<Payment, 'id' | 'createdAt'>, createdAt?: string): Payment => {
@@ -656,6 +801,69 @@ export const paymentStorage = {
     if (filtered.length === payments.length) return;
     setAll('payments', filtered);
   },
+  updateManualEntry: (
+    id: string,
+    updates: {
+      amount?: number;
+      note?: string;
+      createdAt?: string;
+      paymentMethod?: Payment['paymentMethod'];
+    },
+  ): Payment | undefined => {
+    const payments = getAll<Payment>('payments');
+    const idx = payments.findIndex((payment) => payment.id === id);
+    if (idx === -1) return undefined;
+
+    const existing = payments[idx];
+    if (!isManualLedgerEntry(existing)) return undefined;
+
+    const amount = updates.amount ?? existing.amount;
+    const note = updates.note ?? existing.note;
+    const createdAt = updates.createdAt ?? existing.createdAt;
+    const paymentMethod = updates.paymentMethod ?? existing.paymentMethod;
+
+    if (amount <= 0) {
+      throw new Error('Amount must be greater than zero');
+    }
+
+    if (
+      existing.type === 'credit' &&
+      !existing.skipInvoiceAllocation &&
+      amount !== existing.amount
+    ) {
+      reverseManualPaymentAllocation(existing.customerId, existing.amount);
+      applyManualPaymentToInvoices(existing.customerId, amount);
+    }
+
+    const updated: Payment = {
+      ...existing,
+      amount,
+      note: note.trim() || existing.note,
+      createdAt,
+      paymentMethod,
+    };
+    payments[idx] = updated;
+    setAll('payments', payments);
+    customerLedgerStorage.touch(existing.customerId);
+    return updated;
+  },
+  deleteManualEntry: (id: string): Payment | undefined => {
+    const payments = getAll<Payment>('payments');
+    const idx = payments.findIndex((payment) => payment.id === id);
+    if (idx === -1) return undefined;
+
+    const existing = payments[idx];
+    if (!isManualLedgerEntry(existing)) return undefined;
+
+    if (existing.type === 'credit' && !existing.skipInvoiceAllocation) {
+      reverseManualPaymentAllocation(existing.customerId, existing.amount);
+    }
+
+    payments.splice(idx, 1);
+    setAll('payments', payments);
+    customerLedgerStorage.touch(existing.customerId);
+    return existing;
+  },
   getCustomerBalance: (customerId: string): { totalDebit: number; totalCredit: number; balance: number } => {
     const payments = getAll<Payment>('payments').filter(p => p.customerId === customerId);
     const totalDebit = payments.filter(p => p.type === 'debit').reduce((s, p) => s + p.amount, 0);
@@ -667,33 +875,30 @@ export const paymentStorage = {
     customerName: string,
     amount: number,
     note: string,
-    options?: { orderDate?: string; applyToInvoices?: boolean }
+    options?: {
+      orderDate?: string;
+      applyToInvoices?: boolean;
+      paymentMethod?: Payment['paymentMethod'];
+    }
   ): Payment => {
     const timestamp = resolveOrderTimestamp(options?.orderDate);
-    const payment = paymentStorage.add({
-      customerId,
-      customerName,
-      amount,
-      type: 'credit',
-      note: note || 'Manual payment',
-    }, timestamp);
-    if (options?.applyToInvoices === false) return payment;
+    const skipInvoiceAllocation = options?.applyToInvoices === false;
+    const payment = paymentStorage.add(
+      {
+        customerId,
+        customerName,
+        amount,
+        type: 'credit',
+        note: note || 'Manual payment',
+        skipInvoiceAllocation,
+        receiptNumber: generateLedgerReceiptNumber(options?.orderDate),
+        paymentMethod: options?.paymentMethod || 'cash',
+      },
+      timestamp,
+    );
+    if (skipInvoiceAllocation) return payment;
 
-    let remaining = amount;
-    const invoices = invoiceStorage.getAll()
-      .filter(i => i.customerId === customerId && (i.status === 'pending' || i.status === 'partial'))
-      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-    for (const inv of invoices) {
-      if (remaining <= 0) break;
-      const invRemaining = inv.total - (inv.paidAmount || 0);
-      if (invRemaining <= 0) continue;
-      const payForThis = Math.min(remaining, invRemaining);
-      inv.paidAmount = (inv.paidAmount || 0) + payForThis;
-      inv.remainingAmount = inv.total - inv.paidAmount;
-      inv.status = inv.remainingAmount <= 0 ? 'paid' : 'partial';
-      invoiceStorage.update(inv.id, { paidAmount: inv.paidAmount, remainingAmount: inv.remainingAmount, status: inv.status });
-      remaining -= payForThis;
-    }
+    applyManualPaymentToInvoices(customerId, amount);
     return payment;
   },
   /** Old ledger row without a linked invoice (opening balance, old order total, old payment). */
@@ -703,7 +908,8 @@ export const paymentStorage = {
     amount: number,
     type: 'debit' | 'credit',
     note: string,
-    orderDate?: string
+    orderDate?: string,
+    options?: { receiptNumber?: string },
   ): Payment => {
     const timestamp = resolveOrderTimestamp(orderDate);
     const defaultNote =
@@ -716,6 +922,7 @@ export const paymentStorage = {
       amount,
       type,
       note: note.trim() || defaultNote,
+      ...(options?.receiptNumber ? { receiptNumber: options.receiptNumber } : {}),
     }, timestamp);
   },
   addLedgerEntry: (
@@ -724,7 +931,11 @@ export const paymentStorage = {
     amount: number,
     type: 'debit' | 'credit',
     note: string,
-    options?: { orderDate?: string; applyToInvoices?: boolean },
+    options?: {
+      orderDate?: string;
+      applyToInvoices?: boolean;
+      paymentMethod?: Payment['paymentMethod'];
+    },
   ): Payment => {
     if (type === 'credit') {
       return paymentStorage.addManualPayment(
@@ -742,6 +953,7 @@ export const paymentStorage = {
       'debit',
       note,
       options?.orderDate,
+      { receiptNumber: generateLedgerReceiptNumber(options?.orderDate) },
     );
   },
 };

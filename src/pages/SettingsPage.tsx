@@ -4,7 +4,7 @@ import { useForm } from "react-hook-form";
 
 import { zodResolver } from "@hookform/resolvers/zod";
 
-import { Download, Upload, HardDrive, Cloud } from "lucide-react";
+import { Download, Upload, HardDrive, Cloud, CloudDownload } from "lucide-react";
 
 import { useSync } from "@/contexts/SyncContext";
 import { useAuth } from "@/contexts/AuthContext";
@@ -24,8 +24,10 @@ import {
   settingsStorage,
   backupStorage,
   notifySettingsUpdated,
+  isLocalTenantDataEmpty,
   type ShopSettings,
 } from "@/lib/storage";
+import { getLastPulledAt } from "@/lib/offline/syncEngine";
 
 import { settingsSchema, type SettingsFormData } from "@/lib/validation";
 
@@ -46,11 +48,17 @@ export default function SettingsPage() {
     backupStorage.getLastBackupAt(),
   );
 
-  const { syncNow, lastSyncedAt, pendingChanges, isOnline, status } = useSync();
+  const { syncNow, pullFromCloud, lastSyncedAt, pendingChanges, isOnline, status } =
+    useSync();
   const { session } = useAuth();
 
   const [syncing, setSyncing] = useState(false);
+  const [pulling, setPulling] = useState(false);
   const [cloudConnected, setCloudConnected] = useState<boolean | null>(null);
+  const [lastPulledAt, setLastPulledAt] = useState<string | null>(() =>
+    getLastPulledAt(),
+  );
+  const localDataEmpty = isLocalTenantDataEmpty();
 
   useEffect(() => {
     if (!isSupabaseConfigured) return;
@@ -229,8 +237,9 @@ export default function SettingsPage() {
 
           <CardContent className="space-y-3 text-sm">
             <p className="text-muted-foreground">
-              Data is saved on this device first. Cloud upload needs internet
-              plus a Supabase login (same email/password as this app).
+              Data is saved on this device first. When this device has no shop
+              records yet, your account data is downloaded from Supabase
+              automatically after sign-in.
             </p>
 
             {session && (
@@ -252,7 +261,20 @@ export default function SettingsPage() {
 
             {lastSyncedAt && (
               <p className="text-muted-foreground">
-                Last synced: {new Date(lastSyncedAt).toLocaleString()}
+                Last uploaded: {new Date(lastSyncedAt).toLocaleString()}
+              </p>
+            )}
+
+            {lastPulledAt && (
+              <p className="text-muted-foreground">
+                Last downloaded: {new Date(lastPulledAt).toLocaleString()}
+              </p>
+            )}
+
+            {localDataEmpty && (
+              <p className="text-amber-700 dark:text-amber-300">
+                No local shop records on this device — download from cloud to
+                load your account data.
               </p>
             )}
 
@@ -286,6 +308,35 @@ export default function SettingsPage() {
             )}
 
             <Button
+              variant="secondary"
+              className="w-full"
+              disabled={pulling || syncing || !isOnline || status === "syncing"}
+              onClick={async () => {
+                if (!localDataEmpty) {
+                  const confirmed = window.confirm(
+                    "Replace local shop data on this device with the cloud copy? Unsynced local-only changes may be lost.",
+                  );
+                  if (!confirmed) return;
+                }
+
+                setPulling(true);
+                const result = await pullFromCloud(!localDataEmpty);
+                setPulling(false);
+                setLastPulledAt(getLastPulledAt());
+
+                if (result.ok) {
+                  toast.success(
+                    result.message || "Downloaded shop data from cloud",
+                  );
+                } else {
+                  toast.error(result.message || "Could not download from cloud");
+                }
+              }}>
+              <CloudDownload className="w-4 h-4 mr-2" />
+              {pulling ? "Downloading…" : "Download from cloud"}
+            </Button>
+
+            <Button
               variant="outline"
               className="w-full"
               disabled={syncing || !isOnline || status === "syncing"}
@@ -301,7 +352,7 @@ export default function SettingsPage() {
               }}>
               {syncing || status === "syncing"
                 ? "Syncing…"
-                : "Sync to cloud now"}
+                : "Upload to cloud now"}
             </Button>
           </CardContent>
         </Card>

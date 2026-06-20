@@ -1,5 +1,6 @@
 import {
   signInSupabaseIfOnline,
+  signInSupabaseWithProfile,
   signOutSupabase,
   signUpSupabaseIfOnline,
   reconnectSupabaseFromLocalSession,
@@ -7,7 +8,7 @@ import {
 import { clearStorageCache } from '@/lib/storage';
 import { readJsonValue, safeSetItem } from '@/lib/persistence/safeLocalStore';
 import { markTenantDataDirty } from '@/lib/offline/syncMeta';
-import { runSyncIfNeeded } from '@/lib/offline/syncEngine';
+import { runPullIfNeeded, runSyncIfNeeded } from '@/lib/offline/syncEngine';
 
 export interface AuthUser {
   id: string;
@@ -221,7 +222,7 @@ export async function register(data: {
           'Account created locally. Check your email to confirm your address before cloud sync works.',
       };
     }
-    void runSyncIfNeeded();
+    void runPullIfNeeded().then(() => runSyncIfNeeded());
     return { success: true, session };
   }
 
@@ -237,6 +238,64 @@ export async function register(data: {
   };
 }
 
+function createSessionFromUser(user: AuthUser): AuthSession {
+  return {
+    userId: user.id,
+    tenantId: user.tenantId,
+    email: user.email,
+    firstName: user.firstName,
+    lastName: user.lastName,
+    phone: user.phone,
+    expiresAt: new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000).toISOString(),
+  };
+}
+
+function persistLoginSession(user: AuthUser): AuthSession {
+  const session = createSessionFromUser(user);
+  safeSetItem(SESSION_KEY, JSON.stringify(session));
+  notifyAuthChanged();
+  clearStorageCache();
+  markTenantDataDirty();
+  return session;
+}
+
+function upsertLocalUserFromCloud(
+  users: AuthUser[],
+  profile: {
+    id: string;
+    email: string;
+    tenantId: string;
+    firstName: string;
+    lastName: string;
+    phone: string;
+  },
+  password: string,
+): AuthUser {
+  const normalizedEmail = profile.email.trim().toLowerCase();
+  const existingIdx = users.findIndex(
+    (entry) => entry.email.toLowerCase() === normalizedEmail,
+  );
+
+  const user: AuthUser = {
+    id: profile.id,
+    tenantId: profile.tenantId,
+    email: normalizedEmail,
+    password,
+    firstName: profile.firstName,
+    lastName: profile.lastName,
+    phone: profile.phone,
+  };
+
+  if (existingIdx === -1) {
+    users.push(user);
+  } else {
+    users[existingIdx] = user;
+  }
+
+  saveUsers(users);
+  return user;
+}
+
 export async function login(
   email: string,
   password: string
@@ -249,42 +308,53 @@ export async function login(
   const normalizedEmail = email.trim().toLowerCase();
   const users = loadUsers();
   const user = users.find(u => u.email.toLowerCase() === normalizedEmail);
-  if (!user) {
-    return { success: false, message: 'Invalid email or password' };
-  }
-  if (user.password !== password) {
-    return { success: false, message: 'Invalid email or password' };
-  }
-  const session: AuthSession = {
-    userId: user.id,
-    tenantId: user.tenantId,
-    email: user.email,
-    firstName: user.firstName,
-    lastName: user.lastName,
-    phone: user.phone,
-    expiresAt: new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000).toISOString(),
-  };
-  safeSetItem(SESSION_KEY, JSON.stringify(session));
-  notifyAuthChanged();
-  clearStorageCache();
-  markTenantDataDirty();
 
-  const supabaseResult = await signInSupabaseIfOnline(user.email, password);
-  if (supabaseResult.ok) {
-    void runSyncIfNeeded();
+  if (user && user.password === password) {
+    const session = persistLoginSession(user);
+
+    const supabaseResult = await signInSupabaseIfOnline(user.email, password);
+    if (supabaseResult.ok) {
+      void runPullIfNeeded().then(() => runSyncIfNeeded());
+      return { success: true, session };
+    }
+
+    if (supabaseResult.error === 'offline-or-unconfigured') {
+      return { success: true, session };
+    }
+
+    return {
+      success: true,
+      session,
+      supabaseWarning:
+        'Signed in locally. For cloud sync, use the same email/password in Supabase Auth, then sign out and sign in again.',
+    };
+  }
+
+  const cloudResult = await signInSupabaseWithProfile(normalizedEmail, password);
+  if (cloudResult.ok && cloudResult.profile) {
+    const localUser = upsertLocalUserFromCloud(
+      users,
+      cloudResult.profile,
+      password,
+    );
+    const session = persistLoginSession(localUser);
+    void runPullIfNeeded().then(() => runSyncIfNeeded());
     return { success: true, session };
   }
 
-  if (supabaseResult.error === 'offline-or-unconfigured') {
-    return { success: true, session };
+  if (cloudResult.error === 'offline-or-unconfigured') {
+    return { success: false, message: 'Invalid email or password' };
   }
 
-  return {
-    success: true,
-    session,
-    supabaseWarning:
-      'Signed in locally. For cloud sync, use the same email/password in Supabase Auth, then sign out and sign in again.',
-  };
+  if (cloudResult.error && /confirm|verified|email/i.test(cloudResult.error)) {
+    return {
+      success: false,
+      message:
+        'Confirm your email address first, then try signing in again.',
+    };
+  }
+
+  return { success: false, message: 'Invalid email or password' };
 }
 
 export function logout(): void {

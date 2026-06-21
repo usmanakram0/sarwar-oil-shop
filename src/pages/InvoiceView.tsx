@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Printer, Wallet, FileText, ClipboardList, Loader2, Trash2 } from 'lucide-react';
+import { Link, useParams, useNavigate } from 'react-router-dom';
+import { ArrowLeft, Printer, Wallet, FileText, ClipboardList, Loader2, Trash2, Pencil } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -14,6 +14,7 @@ import {
   formatLineItemQuantityWithUnit,
   lineItemDisplayName,
 } from '@/lib/productTypes';
+import { getInvoiceSlipLabel } from '@/lib/dailySlipNumber';
 import { getInvoiceDiscountAmount } from '@/lib/storage';
 import { getInvoiceCustomerName } from '@/lib/walkingCustomer';
 import { buildInvoiceReceiptHtml } from '@/lib/printing/invoiceReceipts';
@@ -24,7 +25,7 @@ import { safeString } from '@/lib/query/safe';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 import InvoiceCloseDialog from '@/components/InvoiceCloseDialog';
-import { isInvoiceClosed } from '@/lib/invoiceLifecycle';
+import { isInvoiceClosed, isInvoiceEdited } from '@/lib/invoiceLifecycle';
 import type { InvoiceCloseMode } from '@/lib/invoiceLifecycle';
 
 export default function InvoiceView() {
@@ -76,6 +77,7 @@ export default function InvoiceView() {
 
   const cur = CURRENCY;
   const customerName = getInvoiceCustomerName(invoice);
+  const slipLabel = getInvoiceSlipLabel(invoice);
   const remaining = invoice.remainingAmount ?? (invoice.total - (invoice.paidAmount || 0));
   const isClosed = isInvoiceClosed(invoice);
 
@@ -126,11 +128,29 @@ export default function InvoiceView() {
             <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-2xl font-heading font-bold">Invoice</h1>
               {statusBadge()}
+              {isInvoiceEdited(invoice) && (
+                <Badge
+                  variant="outline"
+                  className="border-sky-400 text-sky-700 dark:text-sky-300 bg-sky-50 dark:bg-sky-950/30">
+                  Edited
+                </Badge>
+              )}
             </div>
-            <p className="text-sm text-muted-foreground">{invoice.invoiceNumber} · {customerName}</p>
+            <p className="text-sm text-muted-foreground">
+              {slipLabel ? `${slipLabel} · ` : ''}
+              {invoice.invoiceNumber} · {customerName}
+            </p>
           </div>
         </div>
         <div className="flex gap-2 flex-wrap justify-end">
+          {!isClosed && (
+            <Button size="sm" variant="outline" asChild>
+              <Link to={`/invoices/${invoice.id}/edit`}>
+                <Pencil className="w-4 h-4 mr-1" />
+                Edit
+              </Link>
+            </Button>
+          )}
           {!isClosed && remaining > 0 && (
             <Button size="sm" variant="outline" onClick={() => setPayDialogOpen(true)}>
               <Wallet className="w-4 h-4 mr-1" />Pay
@@ -185,6 +205,9 @@ export default function InvoiceView() {
             <div className="text-right">
               <div className="flex items-center justify-end gap-2 flex-wrap">
                 <div className="text-right">
+                  {slipLabel && (
+                    <p className="text-sm font-heading font-semibold">{slipLabel}</p>
+                  )}
                   <p className="font-heading font-bold text-lg">{invoice.invoiceNumber}</p>
                   <p className="text-sm font-medium">{customerName}</p>
                 </div>

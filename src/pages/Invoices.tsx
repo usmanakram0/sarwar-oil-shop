@@ -1,18 +1,20 @@
 import { useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Search, Eye, Trash2, FileText, History } from 'lucide-react';
+import { Plus, Search, Eye, Trash2, FileText, History, Pencil } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import { DatePickerField } from '@/components/ui/date-picker';
+import { formatInvoiceDailySlip } from '@/lib/dailySlipNumber';
 import ListPagination from '@/components/ui/ListPagination';
 import { formatMoney } from '@/lib/currency';
-import { isInvoiceClosed } from '@/lib/invoiceLifecycle';
+import { isInvoiceClosed, isInvoiceEdited } from '@/lib/invoiceLifecycle';
 import { useInvoicesList } from '@/hooks/useShopData';
 import { useInvoiceMutations } from '@/hooks/useShopMutations';
 import { usePagination } from '@/hooks/usePagination';
-import { format } from 'date-fns';
+import { format, parseISO, startOfDay, endOfDay } from 'date-fns';
 import { toast } from 'sonner';
 import InvoiceCloseDialog from '@/components/InvoiceCloseDialog';
 import type { Invoice } from '@/lib/storage';
@@ -23,6 +25,8 @@ export default function Invoices() {
   const { close: closeInvoice } = useInvoiceMutations();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [closeTarget, setCloseTarget] = useState<Invoice | null>(null);
 
   const filtered = useMemo(() => {
@@ -32,9 +36,12 @@ export default function Invoices() {
         const matchSearch = i.invoiceNumber.toLowerCase().includes(search.toLowerCase()) ||
           i.customerName.toLowerCase().includes(search.toLowerCase());
         const matchStatus = statusFilter === 'all' || i.status === statusFilter;
-        return matchSearch && matchStatus;
+        const createdAt = new Date(i.createdAt);
+        const matchFrom = !dateFrom || createdAt >= startOfDay(parseISO(dateFrom));
+        const matchTo = !dateTo || createdAt <= endOfDay(parseISO(dateTo));
+        return matchSearch && matchStatus && matchFrom && matchTo;
       });
-  }, [invoices, search, statusFilter]);
+  }, [invoices, search, statusFilter, dateFrom, dateTo]);
 
   const {
     paginatedItems: paginatedInvoices,
@@ -44,7 +51,7 @@ export default function Invoices() {
     setPageSize,
     totalItems,
     totalPages,
-  } = usePagination(filtered, [search, statusFilter]);
+  } = usePagination(filtered, [search, statusFilter, dateFrom, dateTo]);
 
   const handleCloseConfirm = (mode: InvoiceCloseMode, restoreStock: boolean) => {
     if (!closeTarget) return;
@@ -91,22 +98,49 @@ export default function Invoices() {
         </div>
       </div>
 
-      <div className="flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <Input placeholder="Search invoices..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input placeholder="Search invoices..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9" />
+          </div>
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="w-full sm:w-[150px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Status</SelectItem>
+              <SelectItem value="paid">Paid</SelectItem>
+              <SelectItem value="partial">Partial</SelectItem>
+              <SelectItem value="pending">Pending</SelectItem>
+              <SelectItem value="returned">Returned</SelectItem>
+              <SelectItem value="cancelled">Voided</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-full sm:w-[150px]"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Status</SelectItem>
-            <SelectItem value="paid">Paid</SelectItem>
-            <SelectItem value="partial">Partial</SelectItem>
-            <SelectItem value="pending">Pending</SelectItem>
-            <SelectItem value="returned">Returned</SelectItem>
-            <SelectItem value="cancelled">Voided</SelectItem>
-          </SelectContent>
-        </Select>
+        <div className="flex flex-col sm:flex-row gap-3 items-end">
+          <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <DatePickerField
+              label="From date"
+              value={dateFrom}
+              onChange={setDateFrom}
+            />
+            <DatePickerField
+              label="To date"
+              value={dateTo}
+              onChange={setDateTo}
+            />
+          </div>
+          {(dateFrom || dateTo) && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setDateFrom('');
+                setDateTo('');
+              }}>
+              Clear dates
+            </Button>
+          )}
+        </div>
       </div>
 
       {filtered.length === 0 ? (
@@ -116,6 +150,7 @@ export default function Invoices() {
           {paginatedInvoices.map(inv => {
             const remaining = inv.remainingAmount ?? (inv.total - (inv.paidAmount || 0));
             const isClosed = isInvoiceClosed(inv);
+            const slipLabel = formatInvoiceDailySlip(inv, invoices);
             return (
               <Card key={inv.id} className="group hover:shadow-md transition-shadow">
                 <CardContent className="py-4">
@@ -126,10 +161,22 @@ export default function Invoices() {
                       </div>
                       <div>
                         <div className="flex items-center gap-2 flex-wrap">
+                          {slipLabel && (
+                            <Badge variant="secondary" className="text-xs font-heading">
+                              {slipLabel}
+                            </Badge>
+                          )}
                           <p className="font-heading font-semibold">{inv.invoiceNumber}</p>
                           {inv.historical && (
                             <Badge variant="outline" className="text-xs border-amber-500 text-amber-700 dark:text-amber-300">
                               Old record
+                            </Badge>
+                          )}
+                          {isInvoiceEdited(inv) && (
+                            <Badge
+                              variant="outline"
+                              className="text-xs border-sky-400 text-sky-700 dark:text-sky-300 bg-sky-50 dark:bg-sky-950/30">
+                              Edited
                             </Badge>
                           )}
                           {statusBadge(inv.status)}
@@ -150,6 +197,11 @@ export default function Invoices() {
                         <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
                           <Link to={`/invoices/${inv.id}`}><Eye className="w-4 h-4" /></Link>
                         </Button>
+                        {!isClosed && (
+                          <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
+                            <Link to={`/invoices/${inv.id}/edit`}><Pencil className="w-4 h-4" /></Link>
+                          </Button>
+                        )}
                         {!isClosed && (
                           <Button
                             variant="ghost"

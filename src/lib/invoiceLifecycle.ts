@@ -15,3 +15,7 @@ export function isInvoiceClosed(invoice: Pick<Invoice, 'status'>): boolean {
 export function isActiveSale(invoice: Pick<Invoice, 'status'>): boolean {
   return !isInvoiceClosed(invoice);
 }
+
+export function isInvoiceEdited(invoice: Pick<Invoice, 'editedAt'>): boolean {
+  return Boolean(invoice.editedAt);
+}

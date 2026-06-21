@@ -306,7 +306,7 @@ export function useInvoiceMutations() {
     }: {
       invoice: Omit<
         Invoice,
-        'id' | 'invoiceNumber' | 'createdAt' | 'updatedAt' | 'historical'
+        'id' | 'invoiceNumber' | 'createdAt' | 'updatedAt' | 'historical' | 'dailySlipNumber'
       >;
       options?: HistoricalEntryOptions;
     }) => invoiceStorage.add(invoice, options),
@@ -343,6 +343,54 @@ export function useInvoiceMutations() {
       return ctx;
     },
     onSuccess: created => replaceOptimisticItem(queryKeys.invoices, created),
+    onError: (_e, _v, ctx) => rollbackOptimisticUpdate(ctx),
+  });
+
+  const edit = useMutation({
+    mutationFn: ({
+      id,
+      invoice,
+    }: {
+      id: string;
+      invoice: Pick<
+        Invoice,
+        | 'customerId'
+        | 'customerName'
+        | 'items'
+        | 'subtotal'
+        | 'discount'
+        | 'tax'
+        | 'total'
+        | 'paidAmount'
+        | 'remainingAmount'
+        | 'paymentMethod'
+        | 'status'
+      >;
+    }) => invoiceStorage.editInvoice(id, invoice),
+    onMutate: async ({ id, invoice }) => {
+      const invoices = queryClient.getQueryData<Invoice[]>(queryKeys.invoices) ?? [];
+      const existing = invoices.find((entry) => entry.id === id);
+      const customerIds = new Set(
+        [existing?.customerId, invoice.customerId].filter(Boolean) as string[],
+      );
+      const ctx = await beginOptimisticUpdate([
+        queryKeys.invoices,
+        queryKeys.products,
+        queryKeys.payments,
+        queryKeys.dashboard,
+        queryKeys.invoice(id),
+        ...Array.from(customerIds).flatMap((customerId) => [
+          queryKeys.customerPayments(customerId),
+          queryKeys.customerBalance(customerId),
+          queryKeys.customerInvoices(customerId),
+        ]),
+      ]);
+      return ctx;
+    },
+    onSuccess: (updated) => {
+      replaceOptimisticItem(queryKeys.invoices, updated);
+      setSingleEntity(queryKeys.invoice(updated.id), updated);
+    },
     onError: (_e, _v, ctx) => rollbackOptimisticUpdate(ctx),
   });
 
@@ -451,7 +499,7 @@ export function useInvoiceMutations() {
     onError: (_e, _v, ctx) => rollbackOptimisticUpdate(ctx),
   });
 
-  return { create, close, recordPayment };
+  return { create, edit, close, recordPayment };
 }
 
 export function useStockPurchaseMutations() {

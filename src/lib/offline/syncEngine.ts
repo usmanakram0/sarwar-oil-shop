@@ -113,6 +113,8 @@ function mapInvoice(inv: Invoice, tenantId: string) {
     remaining_amount: inv.remainingAmount,
     payment_method: inv.paymentMethod,
     status: inv.status,
+    daily_slip_number: inv.dailySlipNumber ?? null,
+    edited_at: inv.editedAt ?? null,
     created_at: inv.createdAt,
     updated_at: inv.updatedAt,
   };

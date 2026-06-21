@@ -140,6 +140,9 @@ function unmapInvoice(row: Record<string, unknown>): Invoice {
     remainingAmount: asNumber(row.remaining_amount),
     paymentMethod: asPaymentMethod(row.payment_method),
     status: asInvoiceStatus(row.status),
+    dailySlipNumber:
+      row.daily_slip_number == null ? undefined : asNumber(row.daily_slip_number),
+    editedAt: asString(row.edited_at) || undefined,
     createdAt: asString(row.created_at),
     updatedAt: asString(row.updated_at),
   };

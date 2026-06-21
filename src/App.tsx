@@ -21,6 +21,7 @@ const Products = lazy(() => import("@/pages/Products"));
 const Customers = lazy(() => import("@/pages/Customers"));
 const Invoices = lazy(() => import("@/pages/Invoices"));
 const InvoiceCreate = lazy(() => import("@/pages/InvoiceCreate"));
+const InvoiceEdit = lazy(() => import("@/pages/InvoiceEdit"));
 const InvoiceView = lazy(() => import("@/pages/InvoiceView"));
 const Ledger = lazy(() => import("@/pages/Ledger"));
 const Suppliers = lazy(() => import("@/pages/Suppliers"));
@@ -64,6 +65,7 @@ const App = () => (
                   <Route path="/customers" element={<LazyPage><Customers /></LazyPage>} />
                   <Route path="/invoices" element={<LazyPage><Invoices /></LazyPage>} />
                   <Route path="/invoices/new" element={<LazyPage><InvoiceCreate /></LazyPage>} />
+                  <Route path="/invoices/:id/edit" element={<LazyPage><InvoiceEdit /></LazyPage>} />
                   <Route path="/invoices/:id" element={<LazyPage><InvoiceView /></LazyPage>} />
                   <Route path="/ledger" element={<LazyPage><Ledger /></LazyPage>} />
                   <Route path="/settings" element={<LazyPage><SettingsPage /></LazyPage>} />

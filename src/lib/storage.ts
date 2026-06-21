@@ -25,6 +25,7 @@ import {
   type InvoiceCloseOptions,
 } from '@/lib/invoiceLifecycle';
 import { isWalkingCustomer } from '@/lib/walkingCustomer';
+import { getNextDailySlipNumber } from '@/lib/dailySlipNumber';
 import {
   normalizeProductType,
   type CartonSize,
@@ -34,6 +35,7 @@ import {
   applyStockDeltasToProducts,
   buildStockDeltaMap,
   roundStockLevel,
+  validateStockOut,
 } from '@/lib/stockMovement';
 
 export type { ProductType, CartonSize };
@@ -88,8 +90,12 @@ export interface Invoice {
   updatedAt: string;
   /** Backfilled from old written records */
   historical?: boolean;
+  /** Daily slip counter (#01, #02…) — resets each calendar day; not the voucher number */
+  dailySlipNumber?: number;
   /** Set when the invoice is returned or voided */
   closedAt?: string;
+  /** Set when the invoice was corrected after creation */
+  editedAt?: string;
   /** Whether stock was put back into containers when closed */
   stockRestoredOnClose?: boolean;
   closureNote?: string;
@@ -607,16 +613,76 @@ export const customerStorage = {
 };
 
 // Invoices
+function syncInvoiceLedgerEntries(invoice: Invoice, timestamp: string): void {
+  if (isWalkingCustomer(invoice.customerId)) return;
+
+  const balanceBefore = paymentStorage.getCustomerBalance(invoice.customerId);
+  const advanceAvailable =
+    balanceBefore.balance < 0 ? Math.abs(balanceBefore.balance) : 0;
+  const advanceApplied = Math.min(advanceAvailable, invoice.total);
+  const isHistorical = Boolean(invoice.historical);
+  const editedSuffix = invoice.editedAt ? ' (edited)' : '';
+
+  paymentStorage.add(
+    {
+      customerId: invoice.customerId,
+      customerName: invoice.customerName,
+      invoiceId: invoice.id,
+      invoiceNumber: invoice.invoiceNumber,
+      amount: invoice.total,
+      type: 'debit',
+      note: isHistorical
+        ? `Historical order ${invoice.invoiceNumber}${editedSuffix}`
+        : `Invoice ${invoice.invoiceNumber}${editedSuffix}`,
+    },
+    timestamp,
+  );
+
+  if (advanceApplied > 0) {
+    paymentStorage.add(
+      {
+        customerId: invoice.customerId,
+        customerName: invoice.customerName,
+        invoiceId: invoice.id,
+        invoiceNumber: invoice.invoiceNumber,
+        amount: advanceApplied,
+        type: 'credit',
+        note: `Advance applied to ${invoice.invoiceNumber}${editedSuffix}`,
+      },
+      timestamp,
+    );
+  }
+
+  if (invoice.paidAmount > 0) {
+    paymentStorage.add(
+      {
+        customerId: invoice.customerId,
+        customerName: invoice.customerName,
+        invoiceId: invoice.id,
+        invoiceNumber: invoice.invoiceNumber,
+        amount: invoice.paidAmount,
+        type: 'credit',
+        note: isHistorical
+          ? `Historical payment for ${invoice.invoiceNumber}${editedSuffix}`
+          : `Payment for ${invoice.invoiceNumber}${editedSuffix}`,
+        paymentMethod: invoice.paymentMethod,
+      },
+      timestamp,
+    );
+  }
+}
+
 export const invoiceStorage = {
   getAll: (): Invoice[] => getAll<Invoice>('invoices'),
   getById: (id: string): Invoice | undefined => getAll<Invoice>('invoices').find(i => i.id === id),
   add: (
-    invoice: Omit<Invoice, 'id' | 'invoiceNumber' | 'createdAt' | 'updatedAt' | 'historical'>,
+    invoice: Omit<Invoice, 'id' | 'invoiceNumber' | 'createdAt' | 'updatedAt' | 'historical' | 'dailySlipNumber'>,
     options?: HistoricalEntryOptions
   ): Invoice => {
     const timestamp = resolveOrderTimestamp(options?.orderDate);
     const isHistorical = Boolean(options?.orderDate || options?.skipStockUpdate);
     const invoices = getAll<Invoice>('invoices');
+    const slipDate = new Date(timestamp);
     const newInvoice: Invoice = {
       ...invoice,
       id: generateId(),
@@ -624,6 +690,9 @@ export const invoiceStorage = {
       createdAt: timestamp,
       updatedAt: timestamp,
       historical: isHistorical,
+      dailySlipNumber: isHistorical
+        ? undefined
+        : getNextDailySlipNumber(invoices, slipDate),
     };
     const stockLines = invoice.items.map((item) => ({
       productId: item.productId,
@@ -644,50 +713,7 @@ export const invoiceStorage = {
       }
       throw error;
     }
-    if (!isWalkingCustomer(invoice.customerId)) {
-      const balanceBefore = paymentStorage.getCustomerBalance(invoice.customerId);
-      const advanceAvailable =
-        balanceBefore.balance < 0 ? Math.abs(balanceBefore.balance) : 0;
-      const advanceApplied = Math.min(advanceAvailable, invoice.total);
-
-      paymentStorage.add({
-        customerId: invoice.customerId,
-        customerName: invoice.customerName,
-        invoiceId: newInvoice.id,
-        invoiceNumber: newInvoice.invoiceNumber,
-        amount: invoice.total,
-        type: 'debit',
-        note: isHistorical
-          ? `Historical order ${newInvoice.invoiceNumber}`
-          : `Invoice ${newInvoice.invoiceNumber}`,
-      }, timestamp);
-
-      if (advanceApplied > 0) {
-        paymentStorage.add({
-          customerId: invoice.customerId,
-          customerName: invoice.customerName,
-          invoiceId: newInvoice.id,
-          invoiceNumber: newInvoice.invoiceNumber,
-          amount: advanceApplied,
-          type: 'credit',
-          note: `Advance applied to ${newInvoice.invoiceNumber}`,
-        }, timestamp);
-      }
-
-      if (invoice.paidAmount > 0) {
-        paymentStorage.add({
-          customerId: invoice.customerId,
-          customerName: invoice.customerName,
-          invoiceId: newInvoice.id,
-          invoiceNumber: newInvoice.invoiceNumber,
-          amount: invoice.paidAmount,
-          type: 'credit',
-          note: isHistorical
-            ? `Historical payment for ${newInvoice.invoiceNumber}`
-            : `Payment for ${newInvoice.invoiceNumber}`,
-        }, timestamp);
-      }
-    }
+    syncInvoiceLedgerEntries(newInvoice, timestamp);
     return newInvoice;
   },
   update: (id: string, updates: Partial<Invoice>): Invoice | undefined => {
@@ -697,6 +723,83 @@ export const invoiceStorage = {
     invoices[idx] = { ...invoices[idx], ...updates, updatedAt: new Date().toISOString() };
     setAll('invoices', invoices);
     return invoices[idx];
+  },
+  editInvoice: (
+    id: string,
+    updates: Pick<
+      Invoice,
+      | 'customerId'
+      | 'customerName'
+      | 'items'
+      | 'subtotal'
+      | 'discount'
+      | 'tax'
+      | 'total'
+      | 'paidAmount'
+      | 'remainingAmount'
+      | 'paymentMethod'
+      | 'status'
+    >,
+  ): Invoice => {
+    const invoices = getAll<Invoice>('invoices');
+    const idx = invoices.findIndex((invoice) => invoice.id === id);
+    if (idx === -1) {
+      throw new Error('Invoice not found');
+    }
+
+    const existing = invoices[idx];
+    if (isInvoiceClosed(existing)) {
+      throw new Error('Cannot edit a closed invoice');
+    }
+
+    const oldCustomerId = existing.customerId;
+    const oldStockLines = existing.items.map((item) => ({
+      productId: item.productId,
+      quantity: item.quantity,
+    }));
+    const newStockLines = updates.items.map((item) => ({
+      productId: item.productId,
+      quantity: item.quantity,
+    }));
+    const shouldUpdateStock = !existing.historical;
+    let stockRestored = false;
+
+    if (shouldUpdateStock) {
+      applyStockLines(oldStockLines, 'in', { skipValidation: true });
+      stockRestored = true;
+    }
+
+    try {
+      if (shouldUpdateStock) {
+        validateStockOut(getAll<Product>('products'), newStockLines);
+        applyStockLines(newStockLines, 'out');
+      }
+
+      paymentStorage.removeByInvoiceId(id);
+
+      if (oldCustomerId && oldCustomerId !== updates.customerId) {
+        customerLedgerStorage.touch(oldCustomerId);
+      }
+
+      const editedAt = new Date().toISOString();
+      const updatedInvoice: Invoice = {
+        ...existing,
+        ...updates,
+        editedAt,
+        updatedAt: editedAt,
+      };
+
+      invoices[idx] = updatedInvoice;
+      setAll('invoices', invoices);
+      syncInvoiceLedgerEntries(updatedInvoice, existing.createdAt);
+      customerLedgerStorage.touch(updates.customerId);
+      return updatedInvoice;
+    } catch (error) {
+      if (stockRestored) {
+        applyStockLines(oldStockLines, 'out', { skipValidation: true });
+      }
+      throw error;
+    }
   },
   closeInvoice: (id: string, options: InvoiceCloseOptions): Invoice | undefined => {
     const invoices = getAll<Invoice>('invoices');

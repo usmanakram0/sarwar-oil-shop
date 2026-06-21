@@ -19,6 +19,7 @@ import { isLowStockAlert } from "@/lib/inventory";
 import { formatStockShort } from "@/lib/productTypes";
 import { format, isToday, isThisWeek, isThisMonth } from "date-fns";
 import { isActiveSale } from "@/lib/invoiceLifecycle";
+import { formatInvoiceDailySlip } from "@/lib/dailySlipNumber";
 import TodaySalesBreakdown from "@/components/dashboard/TodaySalesBreakdown";
 
 export default function Dashboard() {
@@ -199,6 +200,7 @@ export default function Dashboard() {
                 {recentInvoices.map((inv) => {
                   const remaining =
                     inv.remainingAmount ?? inv.total - (inv.paidAmount || 0);
+                  const slipLabel = formatInvoiceDailySlip(inv, invoices);
                   return (
                     <Link
                       key={inv.id}
@@ -206,7 +208,17 @@ export default function Dashboard() {
                       className="flex items-center justify-between p-3 rounded-lg bg-muted/40 hover:bg-muted transition-colors">
                       <div>
                         <p className="text-sm font-medium">
-                          {inv.invoiceNumber}
+                          {slipLabel ? (
+                            <>
+                              <span>{slipLabel}</span>
+                              <span className="text-muted-foreground font-normal">
+                                {" "}
+                                · {inv.invoiceNumber}
+                              </span>
+                            </>
+                          ) : (
+                            inv.invoiceNumber
+                          )}
                         </p>
                         <p className="text-xs text-muted-foreground">
                           {inv.customerName} ·{" "}

@@ -21,6 +21,7 @@ import {
   getTodayTotalLiters,
   type TodayProductSale,
 } from "@/lib/todaySales";
+import TodayInvoiceSlips from "@/components/dashboard/TodayInvoiceSlips";
 
 interface TodaySalesBreakdownProps {
   invoices: Invoice[];
@@ -148,7 +149,7 @@ export default function TodaySalesBreakdown({
 
   return (
     <>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         <SalesSummaryCard
           icon={<Droplets className="w-5 h-5 text-primary" />}
           label="Oil Sale Today"
@@ -161,6 +162,7 @@ export default function TodaySalesBreakdown({
           value={formatCartons(todayTotalCartons)}
           onClick={() => setCartonOpen(true)}
         />
+        <TodayInvoiceSlips invoices={invoices} />
       </div>
 
       <SalesBreakdownDialog

@@ -7,6 +7,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { SyncProvider } from "@/contexts/SyncContext";
 import ProtectedRoute from "@/components/auth/ProtectedRoute";
+import ShopStorageProvider from "@/components/persistence/ShopStorageProvider";
 import AppLayout from "@/components/layout/AppLayout";
 import PageLoader from "@/components/layout/PageLoader";
 import ErrorBoundary from "@/components/ErrorBoundary";
@@ -55,6 +56,7 @@ const App = () => (
               <Route path="/reset-password" element={<ResetPassword />} />
 
               <Route element={<ProtectedRoute />}>
+                <Route element={<ShopStorageProvider />}>
                 <Route element={<AppLayout />}>
                   <Route path="/" element={<LazyPage><Dashboard /></LazyPage>} />
                   <Route path="/products" element={<LazyPage><Products /></LazyPage>} />
@@ -70,6 +72,7 @@ const App = () => (
                   <Route path="/ledger" element={<LazyPage><Ledger /></LazyPage>} />
                   <Route path="/settings" element={<LazyPage><SettingsPage /></LazyPage>} />
                   <Route path="/profile" element={<LazyPage><Profile /></LazyPage>} />
+                </Route>
                 </Route>
               </Route>
 

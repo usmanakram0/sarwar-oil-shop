@@ -32,7 +32,8 @@ export function formatCloudSyncError(error: unknown, table?: string): string {
 
   if (error instanceof Error) {
     if (table && error.message.startsWith(`${table}:`)) {
-      return `Cloud upload failed (${table}). Your data is safe on this device.`;
+      const detail = error.message.slice(table.length + 2).trim();
+      return `Cloud upload failed (${table}): ${detail}. Your data is safe on this device.`;
     }
     return `Cloud upload failed: ${error.message}. Your data is safe on this device.`;
   }

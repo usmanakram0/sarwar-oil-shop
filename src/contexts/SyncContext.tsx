@@ -17,7 +17,14 @@ import {
   type SyncStatusPayload,
   isTenantDataDirty,
 } from '@/lib/offline/syncMeta';
-import { getLastSyncedAt, pullLocalDataFromSupabase, pushLocalDataToSupabase, runSyncIfNeeded, shouldOfferCloudDownload } from '@/lib/offline/syncEngine';
+import {
+  getLastSyncedAt,
+  pullLocalDataFromSupabase,
+  pushLocalDataToSupabase,
+  runSyncIfNeeded,
+  shouldOfferCloudDownload,
+  type SyncPushResult,
+} from '@/lib/offline/syncEngine';
 import CloudDownloadOfferDialog from '@/components/sync/CloudDownloadOfferDialog';
 
 interface SyncContextValue {
@@ -26,7 +33,7 @@ interface SyncContextValue {
   lastSyncedAt: string | null;
   pendingChanges: boolean;
   isOnline: boolean;
-  syncNow: () => Promise<{ ok: boolean; message?: string }>;
+  syncNow: () => Promise<SyncPushResult>;
   pullFromCloud: (force?: boolean) => Promise<{ ok: boolean; message?: string; recordCount?: number }>;
 }
 

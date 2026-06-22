@@ -6,6 +6,7 @@ import {
   reconnectSupabaseFromLocalSession,
 } from '@/lib/supabase/authBridge';
 import { clearStorageCache } from '@/lib/storage';
+import { resetShopStorageSession } from '@/lib/persistence/shopStorage';
 import { readJsonValue, safeSetItem } from '@/lib/persistence/safeLocalStore';
 import { markTenantDataDirty } from '@/lib/offline/syncMeta';
 import { runSyncIfNeeded } from '@/lib/offline/syncEngine';
@@ -360,6 +361,7 @@ export async function login(
 export function logout(): void {
   localStorage.removeItem(SESSION_KEY);
   void signOutSupabase();
+  resetShopStorageSession();
   clearStorageCache();
   notifyAuthChanged();
 }

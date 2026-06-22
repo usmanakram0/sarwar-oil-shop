@@ -32,6 +32,7 @@ import {
   notifySettingsUpdated,
   isLocalTenantDataEmpty,
   getLocalTenantRecordSummary,
+  fetchStorageUsage,
   type ShopSettings,
 } from "@/lib/storage";
 import { getLastPulledAt } from "@/lib/offline/syncEngine";
@@ -46,11 +47,12 @@ import { toast } from "sonner";
 
 import { Progress } from "@/components/ui/progress";
 import ConfirmDataOverwriteDialog from "@/components/ConfirmDataOverwriteDialog";
+import SyncHealthPanel from "@/components/sync/SyncHealthPanel";
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<ShopSettings>(settingsStorage.get());
 
-  const [storageUsage] = useState(backupStorage.getStorageUsage());
+  const [storageUsage, setStorageUsage] = useState(backupStorage.getStorageUsage());
 
   const [lastBackupAt, setLastBackupAt] = useState(
     backupStorage.getLastBackupAt(),
@@ -64,6 +66,10 @@ export default function SettingsPage() {
     isOnline,
     status,
   } = useSync();
+
+  useEffect(() => {
+    void fetchStorageUsage().then(setStorageUsage);
+  }, [lastSyncedAt, status]);
   const { session } = useAuth();
 
   const [syncing, setSyncing] = useState(false);
@@ -77,7 +83,9 @@ export default function SettingsPage() {
 
   const [cloudDownloadDialogOpen, setCloudDownloadDialogOpen] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
-  const [pendingImportJson, setPendingImportJson] = useState<string | null>(null);
+  const [pendingImportJson, setPendingImportJson] = useState<string | null>(
+    null,
+  );
 
   useEffect(() => {
     if (!isSupabaseConfigured) return;
@@ -142,12 +150,15 @@ export default function SettingsPage() {
   const handleConfirmImport = () => {
     if (!pendingImportJson) return;
 
+    backupStorage.downloadPreOverwrite();
+
     const result = backupStorage.import(pendingImportJson);
     setPendingImportJson(null);
     setImportDialogOpen(false);
 
     if (result.success) {
       toast.success(result.message);
+      toast.info("A safety backup of your previous data was downloaded");
       setSettings(settingsStorage.get());
       form.reset(settingsStorage.get());
       notifySettingsUpdated();
@@ -158,6 +169,8 @@ export default function SettingsPage() {
   };
 
   const handleConfirmCloudDownload = async () => {
+    backupStorage.downloadPreOverwrite();
+
     setPulling(true);
     const result = await pullFromCloud(!localDataEmpty);
     setPulling(false);
@@ -166,6 +179,7 @@ export default function SettingsPage() {
 
     if (result.ok) {
       toast.success(result.message || "Downloaded shop data from cloud");
+      toast.info("A safety backup of your previous data was downloaded");
       return;
     }
 
@@ -278,9 +292,10 @@ export default function SettingsPage() {
 
           <CardContent className="space-y-3 text-sm">
             <p className="text-muted-foreground">
-              Data is saved on this device first. Upload sends your local copy
-              to the cloud. Downloading from cloud replaces everything on this
-              device — it never runs automatically.
+              Shop data is stored on this device in IndexedDB (large offline
+              storage). Upload sends your copy to the cloud. Downloading from
+              cloud replaces everything on this device — it never runs
+              automatically.
             </p>
 
             {!localDataEmpty && (
@@ -352,6 +367,11 @@ export default function SettingsPage() {
                   setCloudConnected(true);
                   const result = await syncNow();
                   setSyncing(false);
+                  if (result.emergencyBackupSaved) {
+                    toast.warning(
+                      "Emergency backup downloaded because upload failed",
+                    );
+                  }
                   if (result.ok) toast.success("Connected and synced to cloud");
                   else
                     toast.error(result.message || "Connected but sync failed");
@@ -360,33 +380,16 @@ export default function SettingsPage() {
               </Button>
             )}
 
-            <Button
+            <SyncHealthPanel />
+
+            {/* <Button
               variant="secondary"
               className="w-full"
               disabled={pulling || syncing || !isOnline || status === "syncing"}
               onClick={() => setCloudDownloadDialogOpen(true)}>
               <CloudDownload className="w-4 h-4 mr-2" />
               {pulling ? "Downloading…" : "Replace device data from cloud"}
-            </Button>
-
-            <Button
-              variant="outline"
-              className="w-full"
-              disabled={syncing || !isOnline || status === "syncing"}
-              onClick={async () => {
-                setSyncing(true);
-
-                const result = await syncNow();
-
-                setSyncing(false);
-
-                if (result.ok) toast.success("Synced to cloud");
-                else toast.error(result.message || "Sync failed");
-              }}>
-              {syncing || status === "syncing"
-                ? "Syncing…"
-                : "Upload to cloud now"}
-            </Button>
+            </Button> */}
           </CardContent>
         </Card>
       )}
@@ -397,7 +400,7 @@ export default function SettingsPage() {
         <CardHeader>
           <CardTitle className="font-heading text-base flex items-center gap-2">
             <HardDrive className="w-4 h-4" />
-            Storage
+            Storage (IndexedDB)
           </CardTitle>
         </CardHeader>
 

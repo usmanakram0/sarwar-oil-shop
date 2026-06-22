@@ -5,6 +5,7 @@ import {
   DATA_RECOVERED_EVENT,
   recoverTenantDataIfNeeded,
 } from '@/lib/persistence/dataRecovery';
+import { flushPendingWrites } from '@/lib/persistence/shopStorage';
 import { clearStorageCache, flushLocalDataSnapshot, STORAGE_QUOTA_EVENT } from '@/lib/storage';
 
 export default function DataPersistenceGuard() {
@@ -13,18 +14,22 @@ export default function DataPersistenceGuard() {
   useEffect(() => {
     if (!isAuthenticated) return;
 
-    const result = recoverTenantDataIfNeeded();
-    if (result.recovered) {
-      clearStorageCache();
-      toast.success(result.message ?? 'Your local shop data was restored');
-    }
+    void recoverTenantDataIfNeeded().then((result) => {
+      if (result.recovered) {
+        clearStorageCache();
+        toast.success(result.message ?? 'Your local shop data was restored');
+      }
+    });
 
     const onRecovered = () => {
       clearStorageCache();
       toast.success('Recovered shop data from a local safety copy');
     };
 
-    const flush = () => flushLocalDataSnapshot();
+    const flush = () => {
+      flushLocalDataSnapshot();
+      void flushPendingWrites();
+    };
 
     const onQuota = () => {
       toast.error('Device storage is full', {

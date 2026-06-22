@@ -2,7 +2,9 @@ import { SHOP_NAME } from '@/lib/shop';
 import { getSession, reconnectCloudSession } from '@/lib/auth';
 import { isSupabaseConfigured, supabase } from '@/lib/supabase/client';
 import {
+  backupStorage,
   customerStorage,
+  getLocalTenantRecordSummary,
   invoiceStorage,
   isLocalTenantDataEmpty,
   paymentStorage,
@@ -37,6 +39,18 @@ import {
   waitForNetworkReady,
   withNetworkRetry,
 } from '@/lib/offline/network';
+import { checkCloudSchemaReady } from '@/lib/offline/syncSchemaCheck';
+import {
+  groupUnsyncedByTable,
+  verifyLocalVsCloud,
+} from '@/lib/offline/syncVerification';
+import {
+  SYNC_TABLE_ORDER,
+  type SyncPushResult,
+  type SyncTableName,
+  type SyncVerificationResult,
+  type UnsyncedRecord,
+} from '@/lib/offline/syncTypes';
 
 const CHUNK = 80;
 
@@ -195,6 +209,69 @@ async function pushTable(
   }
 }
 
+function mapTableRows(
+  table: SyncTableName,
+  tenantId: string,
+  ids?: Set<string>
+): Record<string, unknown>[] {
+  const filter = <T extends { id: string }>(rows: T[]) =>
+    ids ? rows.filter((row) => ids.has(row.id)) : rows;
+
+  switch (table) {
+    case 'products':
+      return filter(productStorage.getAll()).map((p) => mapProduct(p, tenantId));
+    case 'customers':
+      return filter(customerStorage.getAll()).map((c) => mapCustomer(c, tenantId));
+    case 'suppliers':
+      return filter(supplierStorage.getAll()).map((s) => mapSupplier(s, tenantId));
+    case 'invoices':
+      return filter(invoiceStorage.getAll()).map((i) => mapInvoice(i, tenantId));
+    case 'payments':
+      return filter(paymentStorage.getAll()).map((p) => mapPayment(p, tenantId));
+    case 'stock_purchases':
+      return filter(stockPurchaseStorage.getAll()).map((p) =>
+        mapStockPurchase(p, tenantId)
+      );
+    case 'supplier_payments':
+      return filter(supplierPaymentStorage.getAll()).map((p) =>
+        mapSupplierPayment(p, tenantId)
+      );
+    default:
+      return [];
+  }
+}
+
+async function pushTables(
+  tenantId: string,
+  tables: SyncTableName[],
+  idsByTable?: Partial<Record<SyncTableName, string[]>>
+): Promise<void> {
+  for (const table of tables) {
+    const idList = idsByTable?.[table];
+    const idSet = idList ? new Set(idList) : undefined;
+    await pushTable(table, mapTableRows(table, tenantId, idSet));
+  }
+
+  const shouldPushSettings =
+    !idsByTable || Object.keys(idsByTable).length === 0;
+  if (shouldPushSettings) {
+    await upsertChunk(
+      'shop_settings',
+      [mapSettings(settingsStorage.get(), tenantId)],
+      'tenant_id'
+    );
+  }
+}
+
+function saveEmergencyBackup(reason: string): boolean {
+  try {
+    backupStorage.downloadEmergency(reason);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 let syncInFlight = false;
 
 async function ensureCloudAuthSession(): Promise<{
@@ -257,6 +334,12 @@ async function ensureCloudAuthSession(): Promise<{
   return { ok: true };
 }
 
+function cloudRecordTotal(
+  verification: Awaited<ReturnType<typeof verifyLocalVsCloud>>
+): number {
+  return verification.counts.reduce((sum, row) => sum + row.cloud, 0);
+}
+
 /**
  * Download this account's shop data from Supabase into localStorage.
  * By default only runs when local data is empty unless `force` is true.
@@ -273,6 +356,18 @@ export async function pullLocalDataFromSupabase(options?: {
       ok: false,
       message: 'Local shop data already exists on this device',
     };
+  }
+
+  if (force && !isLocalTenantDataEmpty()) {
+    const verification = await verifyLocalVsCloud();
+    const localTotal = getLocalTenantRecordSummary().total;
+    const cloudTotal = cloudRecordTotal(verification);
+    if (localTotal > cloudTotal) {
+      return {
+        ok: false,
+        message: `This device has ${localTotal} records but cloud only has ${cloudTotal}. Upload to cloud first — do not replace local data.`,
+      };
+    }
   }
 
   if (syncInFlight) {
@@ -346,79 +441,139 @@ export async function runPullIfNeeded(): Promise<void> {
   return;
 }
 
-/**
- * Push all local tenant data to Supabase (offline-first: local is source of truth).
- */
-export async function pushLocalDataToSupabase(): Promise<{
-  ok: boolean;
-  message?: string;
-}> {
+async function runPushWithVerification(options: {
+  tables: SyncTableName[];
+  idsByTable?: Partial<Record<SyncTableName, string[]>>;
+  statusMessage: string;
+}): Promise<SyncPushResult> {
   const auth = await ensureCloudAuthSession();
   if (!auth.ok) return { ok: false, message: auth.message };
+
+  const schema = await checkCloudSchemaReady();
+  if (!schema.ok) {
+    emitSyncStatus({ state: 'error', message: schema.message });
+    return { ok: false, message: schema.message };
+  }
 
   if (syncInFlight) {
     return { ok: false, message: 'Sync already in progress' };
   }
 
   syncInFlight = true;
-  emitSyncStatus({ state: 'syncing', message: 'Uploading local data…' });
+  emitSyncStatus({ state: 'syncing', message: options.statusMessage });
 
   const session = getSession()!;
   const tenantId = session.tenantId;
 
   try {
-    await pushTable(
-      'products',
-      productStorage.getAll().map(p => mapProduct(p, tenantId))
-    );
-    await pushTable(
-      'customers',
-      customerStorage.getAll().map(c => mapCustomer(c, tenantId))
-    );
-    await pushTable(
-      'suppliers',
-      supplierStorage.getAll().map(s => mapSupplier(s, tenantId))
-    );
-    await pushTable(
-      'invoices',
-      invoiceStorage.getAll().map(i => mapInvoice(i, tenantId))
-    );
-    await pushTable(
-      'payments',
-      paymentStorage.getAll().map(p => mapPayment(p, tenantId))
-    );
-    await pushTable(
-      'stock_purchases',
-      stockPurchaseStorage.getAll().map(p => mapStockPurchase(p, tenantId))
-    );
-    await pushTable(
-      'supplier_payments',
-      supplierPaymentStorage.getAll().map(p => mapSupplierPayment(p, tenantId))
-    );
-    await upsertChunk(
-      'shop_settings',
-      [mapSettings(settingsStorage.get(), tenantId)],
-      'tenant_id'
-    );
+    await pushTables(tenantId, options.tables, options.idsByTable);
+
+    const verification = await verifyLocalVsCloud();
+
+    if (!verification.ok) {
+      const message = `${verification.unsynced.length} record(s) still not in cloud after upload. See Settings → Sync status.`;
+      const emergencyBackupSaved = saveEmergencyBackup('sync-incomplete');
+      emitSyncStatus({ state: 'error', message });
+      markTenantDataDirty();
+      return {
+        ok: false,
+        message,
+        verification,
+        emergencyBackupSaved,
+      };
+    }
 
     clearTenantDataDirty();
     const lastSyncedAt = new Date().toISOString();
     localStorage.setItem('oilshop_last_synced_at', lastSyncedAt);
-    emitSyncStatus({ state: 'success', message: 'Synced to cloud', lastSyncedAt });
-    return { ok: true, message: 'Synced' };
+    emitSyncStatus({
+      state: 'success',
+      message: 'Synced and verified with cloud',
+      lastSyncedAt,
+    });
+    return {
+      ok: true,
+      message: 'Synced and verified with cloud',
+      verification,
+    };
   } catch (e) {
     const tableMatch =
       e instanceof Error ? e.message.match(/^([a-z_]+):/) : null;
     const table = tableMatch?.[1];
     const message = formatCloudSyncError(e, table);
+    const emergencyBackupSaved = saveEmergencyBackup('sync-error');
+    const verification = await verifyLocalVsCloud().catch(() => undefined);
     emitSyncStatus({
       state: isRetryableNetworkError(e) ? 'offline' : 'error',
       message,
     });
-    return { ok: false, message };
+    markTenantDataDirty();
+    return {
+      ok: false,
+      message,
+      verification,
+      emergencyBackupSaved,
+    };
   } finally {
     syncInFlight = false;
   }
+}
+
+/**
+ * Push all local tenant data to Supabase (offline-first: local is source of truth).
+ */
+export async function pushLocalDataToSupabase(): Promise<SyncPushResult> {
+  return runPushWithVerification({
+    tables: [...SYNC_TABLE_ORDER],
+    statusMessage: 'Uploading local data…',
+  });
+}
+
+/** Push only records that verification reported as missing from cloud. */
+export async function pushUnsyncedToSupabase(
+  unsynced: UnsyncedRecord[]
+): Promise<SyncPushResult> {
+  if (unsynced.length === 0) {
+    const verification = await verifyLocalVsCloud();
+    return {
+      ok: verification.ok,
+      message: verification.ok
+        ? 'All records already in cloud'
+        : 'Nothing to upload',
+      verification,
+    };
+  }
+
+  const idsByTable = groupUnsyncedByTable(unsynced);
+  const tables = SYNC_TABLE_ORDER.filter((table) => idsByTable[table]?.length);
+
+  return runPushWithVerification({
+    tables,
+    idsByTable,
+    statusMessage: `Uploading ${unsynced.length} unsynced record(s)…`,
+  });
+}
+
+export async function verifySyncWithCloud(): Promise<SyncVerificationResult> {
+  const verifiedAt = new Date().toISOString();
+  const auth = await ensureCloudAuthSession();
+  if (!auth.ok) {
+    const localOnly = await verifyLocalVsCloud().catch(() => null);
+    if (localOnly) {
+      return {
+        ...localOnly,
+        ok: false,
+        verifiedAt,
+      };
+    }
+    return {
+      ok: false,
+      verifiedAt,
+      counts: [],
+      unsynced: [],
+    };
+  }
+  return verifyLocalVsCloud();
 }
 
 export async function runSyncIfNeeded(): Promise<void> {
@@ -447,3 +602,6 @@ export function getLastSyncedAt(): string | null {
 export function getLastPulledAt(): string | null {
   return localStorage.getItem('oilshop_last_pulled_at');
 }
+
+export type { SyncPushResult, SyncVerificationResult, UnsyncedRecord } from '@/lib/offline/syncTypes';
+export { getLastVerifiedAt } from '@/lib/offline/syncVerification';

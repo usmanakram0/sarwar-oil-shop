@@ -7,10 +7,12 @@ import {
   type TenantAutosavePayload,
 } from '@/lib/persistence/tenantAutosave';
 import {
-  LocalStorageQuotaError,
-  readJsonValue,
-  safeSetItem,
-} from '@/lib/persistence/safeLocalStore';
+  flushPendingWrites,
+  getShopStorageUsage,
+  readShopJson,
+  readShopRaw,
+  writeShopRaw,
+} from '@/lib/persistence/shopStorage';
 import {
   type HistoricalEntryOptions,
   resolveOrderTimestamp,
@@ -306,14 +308,14 @@ function buildTenantAutosaveSnapshot(): TenantAutosavePayload {
     const cacheKey = scopedKey(key);
     const cached = listCache.get(cacheKey);
     if (cached) return cached as T[];
-    return readJsonValue<T[]>(cacheKey, []);
+    return readShopJson<T[]>(cacheKey, []);
   };
 
   const settingsKey = scopedKey('settings');
   const settings =
     settingsCacheKey === settingsKey && settingsCache
       ? settingsCache
-      : readJsonValue<ShopSettings>(settingsKey, DEFAULT_SETTINGS);
+      : readShopJson<ShopSettings>(settingsKey, DEFAULT_SETTINGS);
 
   return {
     version: 1,
@@ -390,23 +392,14 @@ function getAll<T>(key: string): T[] {
   const cached = listCache.get(cacheKey);
   if (cached) return cached as T[];
 
-  const parsed = readJsonValue<T[]>(cacheKey, [], {
-    onRecovered: () => notifyStorageRecovered(key),
-  });
+  const parsed = readShopJson<T[]>(cacheKey, []);
   listCache.set(cacheKey, parsed);
   return parsed;
 }
 
 function setAll<T>(key: string, data: T[]): void {
   const cacheKey = scopedKey(key);
-  try {
-    safeSetItem(cacheKey, JSON.stringify(data));
-  } catch (error) {
-    if (error instanceof LocalStorageQuotaError) {
-      window.dispatchEvent(new Event(STORAGE_QUOTA_EVENT));
-    }
-    throw error;
-  }
+  writeShopRaw(cacheKey, JSON.stringify(data));
   listCache.set(cacheKey, data);
   markTenantDataDirty();
   scheduleTenantAutosave(buildTenantAutosaveSnapshot);
@@ -418,7 +411,7 @@ function setAll<T>(key: string, data: T[]): void {
 
 function setAllSilent<T>(key: string, data: T[]): void {
   const cacheKey = scopedKey(key);
-  safeSetItem(cacheKey, JSON.stringify(data));
+  writeShopRaw(cacheKey, JSON.stringify(data));
   listCache.set(cacheKey, data);
   const scopes = storageKeyToScopes(key);
   if (scopes.length > 0) {
@@ -506,7 +499,7 @@ export function replaceTenantDataFromCloud(snapshot: TenantCloudSnapshot): void 
 
   const settingsKey = scopedKey('settings');
   const settings = normalizeSettings(snapshot.settings);
-  safeSetItem(settingsKey, JSON.stringify(settings));
+  writeShopRaw(settingsKey, JSON.stringify(settings));
   settingsCacheKey = settingsKey;
   settingsCache = settings;
 
@@ -540,15 +533,38 @@ function cascadeSupplierName(supplierId: string, newName: string): void {
 }
 
 function getStorageUsage(): { used: number; total: number; percentage: number } {
-  let total = 0;
-  const prefix = `tenant_${getCurrentTenantId()}_`;
-  for (const key in localStorage) {
-    if (Object.prototype.hasOwnProperty.call(localStorage, key) && key.startsWith(prefix)) {
-      total += localStorage.getItem(key)!.length * 2;
-    }
+  const dataKeys = [
+    'products',
+    'customers',
+    'suppliers',
+    'invoices',
+    'payments',
+    'customerLedgers',
+    'stockPurchases',
+    'supplierPayments',
+    'settings',
+    'last_backup_at',
+  ];
+  let used = 0;
+  for (const dataKey of dataKeys) {
+    const cacheKey = scopedKey(dataKey);
+    const raw = readShopRaw(cacheKey);
+    if (raw) used += (cacheKey.length + raw.length) * 2;
   }
-  const maxSize = 5 * 1024 * 1024;
-  return { used: total, total: maxSize, percentage: (total / maxSize) * 100 };
+  const maxSize = 250 * 1024 * 1024;
+  return {
+    used,
+    total: maxSize,
+    percentage: Math.min(100, (used / maxSize) * 100),
+  };
+}
+
+export async function fetchStorageUsage(): Promise<{
+  used: number;
+  total: number;
+  percentage: number;
+}> {
+  return getShopStorageUsage(getCurrentTenantId());
 }
 
 // Products
@@ -1341,11 +1357,9 @@ export const settingsStorage = {
     const cacheKey = scopedKey('settings');
     if (settingsCacheKey === cacheKey && settingsCache) return settingsCache;
 
-    const parsed = readJsonValue<
+    const parsed = readShopJson<
       Partial<ShopSettings> & { shopName?: string; currency?: string }
-    >(cacheKey, DEFAULT_SETTINGS, {
-      onRecovered: () => notifyStorageRecovered('settings'),
-    });
+    >(cacheKey, DEFAULT_SETTINGS);
     const merged = normalizeSettings(parsed);
     settingsCacheKey = cacheKey;
     settingsCache = merged;
@@ -1359,7 +1373,7 @@ export const settingsStorage = {
     const current = settingsStorage.get();
     const updated = { ...current, ...safeUpdates };
     const cacheKey = scopedKey('settings');
-    safeSetItem(cacheKey, JSON.stringify(updated));
+    writeShopRaw(cacheKey, JSON.stringify(updated));
     settingsCacheKey = cacheKey;
     settingsCache = updated;
     markTenantDataDirty();
@@ -1372,13 +1386,13 @@ export const settingsStorage = {
 // Backup & Restore
 export const backupStorage = {
   getLastBackupAt: (): Date | null => {
-    const raw = localStorage.getItem(scopedKey('last_backup_at'));
+    const raw = readShopRaw(scopedKey('last_backup_at'));
     if (!raw) return null;
     const date = new Date(raw);
     return Number.isNaN(date.getTime()) ? null : date;
   },
   markBackupCompleted: (): void => {
-    localStorage.setItem(scopedKey('last_backup_at'), new Date().toISOString());
+    writeShopRaw(scopedKey('last_backup_at'), new Date().toISOString());
   },
   isBackupDue: (): boolean => {
     const last = backupStorage.getLastBackupAt();
@@ -1386,15 +1400,25 @@ export const backupStorage = {
     return Date.now() - last.getTime() >= BACKUP_INTERVAL_MS;
   },
   download: (): void => {
+    backupStorage.downloadWithSuffix('backup', true);
+  },
+  downloadWithSuffix: (suffix: string, markCompleted = false): void => {
     const data = backupStorage.export();
     const blob = new Blob([data], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = `oil-shop-backup-${new Date().toISOString().split('T')[0]}.json`;
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    anchor.download = `oil-shop-${suffix}-${stamp}.json`;
     anchor.click();
     URL.revokeObjectURL(url);
-    backupStorage.markBackupCompleted();
+    if (markCompleted) backupStorage.markBackupCompleted();
+  },
+  downloadEmergency: (reason: string): void => {
+    backupStorage.downloadWithSuffix(`emergency-${reason}`, false);
+  },
+  downloadPreOverwrite: (): void => {
+    backupStorage.downloadWithSuffix('pre-overwrite', false);
   },
   export: (): string => {
     const data = {
@@ -1429,7 +1453,7 @@ export const backupStorage = {
         const settings = normalizeSettings(
           data.settings as Partial<ShopSettings> & { shopName?: string; currency?: string }
         );
-        safeSetItem(scopedKey('settings'), JSON.stringify(settings));
+        writeShopRaw(scopedKey('settings'), JSON.stringify(settings));
         settingsCacheKey = scopedKey('settings');
         settingsCache = settings;
       }
@@ -1454,4 +1478,5 @@ export function notifySettingsUpdated(): void {
 /** Force-write the debounced local safety snapshot (e.g. before tab close). */
 export function flushLocalDataSnapshot(): void {
   flushTenantAutosave(buildTenantAutosaveSnapshot);
+  void flushPendingWrites();
 }

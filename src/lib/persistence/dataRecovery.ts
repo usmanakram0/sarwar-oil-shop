@@ -1,15 +1,20 @@
 import { getSession } from '@/lib/auth';
 import {
+  flushPendingWrites,
+  hydrateShopStorage,
+  readShopJson,
+  writeShopRaw,
+} from '@/lib/persistence/shopStorage';
+import {
   readTenantAutosave,
   type TenantAutosavePayload,
 } from '@/lib/persistence/tenantAutosave';
-import { readJsonValue, safeSetItem } from '@/lib/persistence/safeLocalStore';
 
 export const DATA_RECOVERED_EVENT = 'oilshop-data-recovered';
 
 export interface DataRecoveryResult {
   recovered: boolean;
-  source?: 'autosave' | 'backup';
+  source?: 'autosave' | 'indexeddb';
   message?: string;
 }
 
@@ -33,7 +38,7 @@ function scopedKey(tenantId: string, key: string): string {
 function countRecords(tenantId: string): number {
   let total = 0;
   for (const key of DATA_KEYS) {
-    const rows = readJsonValue<unknown[]>(scopedKey(tenantId, key), []);
+    const rows = readShopJson<unknown[]>(scopedKey(tenantId, key), []);
     total += rows.length;
   }
   return total;
@@ -55,23 +60,27 @@ function restoreFromAutosave(
   };
 
   for (const key of DATA_KEYS) {
-    safeSetItem(scopedKey(tenantId, key), JSON.stringify(map[key] ?? []));
+    writeShopRaw(scopedKey(tenantId, key), JSON.stringify(map[key] ?? []));
   }
 
   if (autosave.settings) {
-    safeSetItem(
+    writeShopRaw(
       scopedKey(tenantId, 'settings'),
       JSON.stringify(autosave.settings),
     );
   }
+
+  void flushPendingWrites();
 }
 
-/** Restore tenant data from autosave when primary keys are empty or missing. */
-export function recoverTenantDataIfNeeded(): DataRecoveryResult {
+/** Restore tenant data from IndexedDB autosave when primary keys are empty. */
+export async function recoverTenantDataIfNeeded(): Promise<DataRecoveryResult> {
   const session = getSession();
   if (!session) return { recovered: false };
 
   const tenantId = session.tenantId;
+  await hydrateShopStorage(tenantId);
+
   const recordCount = countRecords(tenantId);
   if (recordCount > 0) return { recovered: false };
 
@@ -91,7 +100,7 @@ export function recoverTenantDataIfNeeded(): DataRecoveryResult {
 
   return {
     recovered: true,
-    source: 'autosave',
+    source: 'indexeddb',
     message: `Restored your shop data from a local safety copy (${autosave.savedAt})`,
   };
 }

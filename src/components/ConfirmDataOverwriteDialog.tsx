@@ -1,4 +1,4 @@
-import { AlertTriangle, Loader2 } from 'lucide-react';
+import { AlertTriangle, Loader2 } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -8,8 +8,8 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
-import type { LocalTenantRecordSummary } from '@/lib/storage';
+} from "@/components/ui/alert-dialog";
+import type { LocalTenantRecordSummary } from "@/lib/storage";
 
 interface ConfirmDataOverwriteDialogProps {
   open: boolean;
@@ -68,7 +68,7 @@ export default function ConfirmDataOverwriteDialog({
 }: ConfirmDataOverwriteDialogProps) {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent className="max-w-md border-destructive/40">
+      <AlertDialogContent className="max-w-fit border-destructive/40">
         <AlertDialogHeader>
           <AlertDialogTitle className="font-heading flex items-center gap-2 text-destructive">
             <AlertTriangle className="w-5 h-5 shrink-0" />
@@ -102,15 +102,16 @@ export default function ConfirmDataOverwriteDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={isLoading}>Cancel — keep my data</AlertDialogCancel>
+          <AlertDialogCancel disabled={isLoading}>
+            Cancel — keep my data
+          </AlertDialogCancel>
           <AlertDialogAction
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors duration-200"
             disabled={isLoading}
             onClick={(event) => {
               event.preventDefault();
               onConfirm();
-            }}
-          >
+            }}>
             {isLoading ? (
               <>
                 <Loader2 className="w-4 h-4 mr-1 animate-spin" />

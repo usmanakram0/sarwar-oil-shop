@@ -4,7 +4,13 @@ import { useForm } from "react-hook-form";
 
 import { zodResolver } from "@hookform/resolvers/zod";
 
-import { Download, Upload, HardDrive, Cloud, CloudDownload } from "lucide-react";
+import {
+  Download,
+  Upload,
+  HardDrive,
+  Cloud,
+  CloudDownload,
+} from "lucide-react";
 
 import { useSync } from "@/contexts/SyncContext";
 import { useAuth } from "@/contexts/AuthContext";
@@ -25,6 +31,7 @@ import {
   backupStorage,
   notifySettingsUpdated,
   isLocalTenantDataEmpty,
+  getLocalTenantRecordSummary,
   type ShopSettings,
 } from "@/lib/storage";
 import { getLastPulledAt } from "@/lib/offline/syncEngine";
@@ -38,6 +45,7 @@ import { SHOP_NAME } from "@/lib/shop";
 import { toast } from "sonner";
 
 import { Progress } from "@/components/ui/progress";
+import ConfirmDataOverwriteDialog from "@/components/ConfirmDataOverwriteDialog";
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<ShopSettings>(settingsStorage.get());
@@ -48,8 +56,14 @@ export default function SettingsPage() {
     backupStorage.getLastBackupAt(),
   );
 
-  const { syncNow, pullFromCloud, lastSyncedAt, pendingChanges, isOnline, status } =
-    useSync();
+  const {
+    syncNow,
+    pullFromCloud,
+    lastSyncedAt,
+    pendingChanges,
+    isOnline,
+    status,
+  } = useSync();
   const { session } = useAuth();
 
   const [syncing, setSyncing] = useState(false);
@@ -59,6 +73,11 @@ export default function SettingsPage() {
     getLastPulledAt(),
   );
   const localDataEmpty = isLocalTenantDataEmpty();
+  const localRecordSummary = getLocalTenantRecordSummary();
+
+  const [cloudDownloadDialogOpen, setCloudDownloadDialogOpen] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [pendingImportJson, setPendingImportJson] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isSupabaseConfigured) return;
@@ -110,25 +129,47 @@ export default function SettingsPage() {
       const reader = new FileReader();
 
       reader.onload = () => {
-        const result = backupStorage.import(reader.result as string);
-
-        if (result.success) {
-          toast.success(result.message);
-
-          setSettings(settingsStorage.get());
-
-          form.reset(settingsStorage.get());
-
-          notifySettingsUpdated();
-        } else {
-          toast.error(result.message);
-        }
+        setPendingImportJson(reader.result as string);
+        setImportDialogOpen(true);
       };
 
       reader.readAsText(file);
     };
 
     input.click();
+  };
+
+  const handleConfirmImport = () => {
+    if (!pendingImportJson) return;
+
+    const result = backupStorage.import(pendingImportJson);
+    setPendingImportJson(null);
+    setImportDialogOpen(false);
+
+    if (result.success) {
+      toast.success(result.message);
+      setSettings(settingsStorage.get());
+      form.reset(settingsStorage.get());
+      notifySettingsUpdated();
+      return;
+    }
+
+    toast.error(result.message);
+  };
+
+  const handleConfirmCloudDownload = async () => {
+    setPulling(true);
+    const result = await pullFromCloud(!localDataEmpty);
+    setPulling(false);
+    setCloudDownloadDialogOpen(false);
+    setLastPulledAt(getLastPulledAt());
+
+    if (result.ok) {
+      toast.success(result.message || "Downloaded shop data from cloud");
+      return;
+    }
+
+    toast.error(result.message || "Could not download from cloud");
   };
 
   const usedMB = (storageUsage.used / (1024 * 1024)).toFixed(2);
@@ -237,10 +278,19 @@ export default function SettingsPage() {
 
           <CardContent className="space-y-3 text-sm">
             <p className="text-muted-foreground">
-              Data is saved on this device first. When this device has no shop
-              records yet, your account data is downloaded from Supabase
-              automatically after sign-in.
+              Data is saved on this device first. Upload sends your local copy
+              to the cloud. Downloading from cloud replaces everything on this
+              device — it never runs automatically.
             </p>
+
+            {!localDataEmpty && (
+              <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                This device has {localRecordSummary.invoices} invoices and{" "}
+                {localRecordSummary.total} total records saved locally. Only use
+                &quot;Replace device data from cloud&quot; if you are sure the
+                cloud copy is newer and complete.
+              </div>
+            )}
 
             {session && (
               <div className="rounded-lg border bg-muted/30 px-3 py-2 space-y-1 text-xs">
@@ -273,8 +323,8 @@ export default function SettingsPage() {
 
             {localDataEmpty && (
               <p className="text-amber-700 dark:text-amber-300">
-                No local shop records on this device — download from cloud to
-                load your account data.
+                No local shop records on this device. You will be asked to
+                confirm before anything is downloaded from the cloud.
               </p>
             )}
 
@@ -294,14 +344,17 @@ export default function SettingsPage() {
                   const reconnect = await reconnectCloudSession();
                   if (!reconnect.ok) {
                     setSyncing(false);
-                    toast.error(reconnect.message || "Could not connect to cloud");
+                    toast.error(
+                      reconnect.message || "Could not connect to cloud",
+                    );
                     return;
                   }
                   setCloudConnected(true);
                   const result = await syncNow();
                   setSyncing(false);
                   if (result.ok) toast.success("Connected and synced to cloud");
-                  else toast.error(result.message || "Connected but sync failed");
+                  else
+                    toast.error(result.message || "Connected but sync failed");
                 }}>
                 Connect cloud & sync
               </Button>
@@ -311,29 +364,9 @@ export default function SettingsPage() {
               variant="secondary"
               className="w-full"
               disabled={pulling || syncing || !isOnline || status === "syncing"}
-              onClick={async () => {
-                if (!localDataEmpty) {
-                  const confirmed = window.confirm(
-                    "Replace local shop data on this device with the cloud copy? Unsynced local-only changes may be lost.",
-                  );
-                  if (!confirmed) return;
-                }
-
-                setPulling(true);
-                const result = await pullFromCloud(!localDataEmpty);
-                setPulling(false);
-                setLastPulledAt(getLastPulledAt());
-
-                if (result.ok) {
-                  toast.success(
-                    result.message || "Downloaded shop data from cloud",
-                  );
-                } else {
-                  toast.error(result.message || "Could not download from cloud");
-                }
-              }}>
+              onClick={() => setCloudDownloadDialogOpen(true)}>
               <CloudDownload className="w-4 h-4 mr-2" />
-              {pulling ? "Downloading…" : "Download from cloud"}
+              {pulling ? "Downloading…" : "Replace device data from cloud"}
             </Button>
 
             <Button
@@ -415,11 +448,49 @@ export default function SettingsPage() {
           </Button>
 
           <p className="text-xs text-muted-foreground">
-            You will receive a weekly reminder to export your data. All amounts
-            use Rs.
+            Import replaces all shop data on this device with the backup file.
+            You will be asked to confirm before anything changes.
           </p>
         </CardContent>
       </Card>
+
+      <ConfirmDataOverwriteDialog
+        open={cloudDownloadDialogOpen}
+        onOpenChange={setCloudDownloadDialogOpen}
+        title="Replace device data from cloud?"
+        actionLabel="Yes, overwrite device data from cloud"
+        summary={localRecordSummary}
+        warnings={
+          localDataEmpty
+            ? [
+                "All shop records on this device will be replaced with the cloud copy.",
+                "If the cloud copy is older or incomplete, recent invoices may be lost.",
+              ]
+            : [
+                "All shop records on this device will be permanently replaced with the cloud copy.",
+                "Any invoices or changes that never uploaded to the cloud will be lost.",
+                "If cloud sync failed earlier, the cloud copy may be missing recent records.",
+              ]
+        }
+        onConfirm={handleConfirmCloudDownload}
+        isLoading={pulling}
+      />
+
+      <ConfirmDataOverwriteDialog
+        open={importDialogOpen}
+        onOpenChange={(open) => {
+          setImportDialogOpen(open);
+          if (!open) setPendingImportJson(null);
+        }}
+        title="Restore from backup file?"
+        actionLabel="Yes, overwrite device data from backup"
+        summary={localRecordSummary}
+        warnings={[
+          "All shop records on this device will be replaced with the backup file you selected.",
+          "Any records created after that backup was exported will be lost unless you exported again.",
+        ]}
+        onConfirm={handleConfirmImport}
+      />
     </div>
   );
 }

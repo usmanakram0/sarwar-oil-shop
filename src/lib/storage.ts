@@ -437,20 +437,61 @@ export interface TenantCloudSnapshot {
   settings: ShopSettings;
 }
 
+export interface LocalTenantRecordSummary {
+  products: number;
+  customers: number;
+  suppliers: number;
+  invoices: number;
+  payments: number;
+  stockPurchases: number;
+  supplierPayments: number;
+  total: number;
+}
+
+export function getLocalTenantRecordSummary(): LocalTenantRecordSummary {
+  try {
+    const products = productStorage.getAll().length;
+    const customers = customerStorage.getAll().length;
+    const suppliers = supplierStorage.getAll().length;
+    const invoices = invoiceStorage.getAll().length;
+    const payments = paymentStorage.getAll().length;
+    const stockPurchases = stockPurchaseStorage.getAll().length;
+    const supplierPayments = supplierPaymentStorage.getAll().length;
+
+    return {
+      products,
+      customers,
+      suppliers,
+      invoices,
+      payments,
+      stockPurchases,
+      supplierPayments,
+      total:
+        products +
+        customers +
+        suppliers +
+        invoices +
+        payments +
+        stockPurchases +
+        supplierPayments,
+    };
+  } catch {
+    return {
+      products: 0,
+      customers: 0,
+      suppliers: 0,
+      invoices: 0,
+      payments: 0,
+      stockPurchases: 0,
+      supplierPayments: 0,
+      total: 0,
+    };
+  }
+}
+
 /** True when this tenant has no shop records saved locally yet. */
 export function isLocalTenantDataEmpty(): boolean {
-  try {
-    return (
-      productStorage.getAll().length === 0 &&
-      customerStorage.getAll().length === 0 &&
-      invoiceStorage.getAll().length === 0 &&
-      paymentStorage.getAll().length === 0 &&
-      stockPurchaseStorage.getAll().length === 0 &&
-      supplierStorage.getAll().length === 0
-    );
-  } catch {
-    return true;
-  }
+  return getLocalTenantRecordSummary().total === 0;
 }
 
 /** Replace local tenant data from a cloud download without marking unsynced changes. */

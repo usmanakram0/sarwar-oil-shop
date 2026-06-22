@@ -333,11 +333,17 @@ export async function pullLocalDataFromSupabase(options?: {
   }
 }
 
-/** Auto-download cloud data for this account when local storage is empty. */
+/** True when this device has no local shop data and cloud download may be offered. */
+export function shouldOfferCloudDownload(): boolean {
+  if (!isSupabaseConfigured || !navigator.onLine || !getSession()) return false;
+  return isLocalTenantDataEmpty();
+}
+
+/**
+ * @deprecated Cloud download never runs automatically — the user must confirm first.
+ */
 export async function runPullIfNeeded(): Promise<void> {
-  if (!isSupabaseConfigured || !navigator.onLine || !getSession()) return;
-  if (!isLocalTenantDataEmpty()) return;
-  await pullLocalDataFromSupabase();
+  return;
 }
 
 /**

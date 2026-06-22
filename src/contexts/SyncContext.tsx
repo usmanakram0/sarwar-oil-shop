@@ -17,7 +17,8 @@ import {
   type SyncStatusPayload,
   isTenantDataDirty,
 } from '@/lib/offline/syncMeta';
-import { getLastSyncedAt, pullLocalDataFromSupabase, pushLocalDataToSupabase, runPullIfNeeded, runSyncIfNeeded } from '@/lib/offline/syncEngine';
+import { getLastSyncedAt, pullLocalDataFromSupabase, pushLocalDataToSupabase, runSyncIfNeeded, shouldOfferCloudDownload } from '@/lib/offline/syncEngine';
+import CloudDownloadOfferDialog from '@/components/sync/CloudDownloadOfferDialog';
 
 interface SyncContextValue {
   status: SyncStatusPayload['state'];
@@ -44,7 +45,14 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   const [isOnline, setIsOnline] = useState(
     typeof navigator !== 'undefined' ? navigator.onLine : true
   );
+  const [cloudDownloadOfferOpen, setCloudDownloadOfferOpen] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const offerCloudDownloadIfNeeded = useCallback(() => {
+    if (shouldOfferCloudDownload()) {
+      setCloudDownloadOfferOpen(true);
+    }
+  }, []);
 
   const applyStatus = useCallback((payload: SyncStatusPayload) => {
     setStatus(payload.state);
@@ -99,9 +107,8 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     };
     const onAuth = () => {
       if (!navigator.onLine) return;
-      void runPullIfNeeded().then(() => {
-        if (isTenantDataDirty()) queueSync();
-      });
+      offerCloudDownloadIfNeeded();
+      if (isTenantDataDirty()) queueSync();
     };
 
     window.addEventListener(SYNC_STATUS_EVENT, onStatus);
@@ -115,9 +122,8 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     } else if (!navigator.onLine) {
       applyStatus({ state: 'offline' });
     } else if (getSession()) {
-      void runPullIfNeeded().then(() => {
-        if (isTenantDataDirty()) queueSync();
-      });
+      offerCloudDownloadIfNeeded();
+      if (isTenantDataDirty()) queueSync();
       void hasSupabaseSession().then(hasCloudSession => {
         if (!hasCloudSession && !isTenantDataDirty()) {
           applyStatus({ state: 'idle' });
@@ -133,7 +139,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       window.removeEventListener(AUTH_CHANGED_EVENT, onAuth);
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [applyStatus, queueSync]);
+  }, [applyStatus, queueSync, offerCloudDownloadIfNeeded]);
 
   useEffect(() => {
     if (!pendingChanges || !isOnline) return;
@@ -161,7 +167,15 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     [status, message, lastSyncedAt, pendingChanges, isOnline, syncNow, pullFromCloud]
   );
 
-  return <SyncContext.Provider value={value}>{children}</SyncContext.Provider>;
+  return (
+    <SyncContext.Provider value={value}>
+      {children}
+      <CloudDownloadOfferDialog
+        open={cloudDownloadOfferOpen}
+        onOpenChange={setCloudDownloadOfferOpen}
+      />
+    </SyncContext.Provider>
+  );
 }
 
 export function useSync(): SyncContextValue {

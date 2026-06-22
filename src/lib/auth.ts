@@ -8,7 +8,7 @@ import {
 import { clearStorageCache } from '@/lib/storage';
 import { readJsonValue, safeSetItem } from '@/lib/persistence/safeLocalStore';
 import { markTenantDataDirty } from '@/lib/offline/syncMeta';
-import { runPullIfNeeded, runSyncIfNeeded } from '@/lib/offline/syncEngine';
+import { runSyncIfNeeded } from '@/lib/offline/syncEngine';
 
 export interface AuthUser {
   id: string;
@@ -222,7 +222,7 @@ export async function register(data: {
           'Account created locally. Check your email to confirm your address before cloud sync works.',
       };
     }
-    void runPullIfNeeded().then(() => runSyncIfNeeded());
+    void runSyncIfNeeded();
     return { success: true, session };
   }
 
@@ -314,7 +314,7 @@ export async function login(
 
     const supabaseResult = await signInSupabaseIfOnline(user.email, password);
     if (supabaseResult.ok) {
-      void runPullIfNeeded().then(() => runSyncIfNeeded());
+      void runSyncIfNeeded();
       return { success: true, session };
     }
 
@@ -338,7 +338,7 @@ export async function login(
       password,
     );
     const session = persistLoginSession(localUser);
-    void runPullIfNeeded().then(() => runSyncIfNeeded());
+    void runSyncIfNeeded();
     return { success: true, session };
   }
 

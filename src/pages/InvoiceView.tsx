@@ -19,7 +19,7 @@ import { getInvoiceDiscountAmount } from '@/lib/storage';
 import { getInvoiceCustomerName } from '@/lib/walkingCustomer';
 import { buildInvoiceReceiptHtml } from '@/lib/printing/invoiceReceipts';
 import { printReceiptBatch } from '@/lib/printing/printService';
-import { useCustomerQuery, useInvoiceQuery, useSettingsQuery } from '@/hooks/useShopData';
+import { useCustomerQuery, useInvoiceQuery, useInvoicesList, useSettingsQuery } from '@/hooks/useShopData';
 import { useInvoiceMutations } from '@/hooks/useShopMutations';
 import { safeString } from '@/lib/query/safe';
 import { format } from 'date-fns';
@@ -32,6 +32,7 @@ export default function InvoiceView() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { data: invoice } = useInvoiceQuery(id);
+  const { invoices } = useInvoicesList();
   const { data: settings } = useSettingsQuery();
   const { data: customer } = useCustomerQuery(invoice?.customerId);
   const { recordPayment, close: closeInvoice } = useInvoiceMutations();
@@ -77,7 +78,7 @@ export default function InvoiceView() {
 
   const cur = CURRENCY;
   const customerName = getInvoiceCustomerName(invoice);
-  const slipLabel = getInvoiceSlipLabel(invoice);
+  const slipLabel = getInvoiceSlipLabel(invoice, invoices);
   const remaining = invoice.remainingAmount ?? (invoice.total - (invoice.paidAmount || 0));
   const isClosed = isInvoiceClosed(invoice);
 

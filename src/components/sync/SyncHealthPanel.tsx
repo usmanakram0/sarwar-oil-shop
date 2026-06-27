@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Loader2, RefreshCw } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, CloudDownload, Loader2, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -10,10 +10,13 @@ import {
   type SyncVerificationResult,
 } from '@/lib/offline/syncEngine';
 import { useSync } from '@/contexts/SyncContext';
+import { getSession } from '@/lib/auth';
+import { isLocalTenantDataEmpty } from '@/lib/storage';
 import { toast } from 'sonner';
 
 export default function SyncHealthPanel() {
-  const { isOnline, status } = useSync();
+  const { isOnline, status, pullFromCloud } = useSync();
+  const tenantId = getSession()?.tenantId;
   const [verification, setVerification] = useState<SyncVerificationResult | null>(
     null
   );
@@ -33,7 +36,9 @@ export default function SyncHealthPanel() {
     setLoading(false);
 
     if (result.ok) {
-      toast.success('All local records verified in cloud');
+      toast.success('Device and cloud are fully in sync');
+    } else if (result.cloudHasMoreRecords && result.uploadComplete) {
+      toast.info('Cloud has your shop data — download it to this device');
     } else if (result.unsynced.length > 0) {
       toast.error(
         `${result.unsynced.length} record(s) not found in cloud — see list below`
@@ -42,10 +47,15 @@ export default function SyncHealthPanel() {
   }, [isOnline]);
 
   useEffect(() => {
-    if (isOnline) void runVerify();
-  }, [isOnline, runVerify]);
+    if (isOnline && tenantId) void runVerify();
+  }, [isOnline, tenantId, runVerify]);
 
   const handleUploadAll = async () => {
+    if (isLocalTenantDataEmpty()) {
+      toast.info('Nothing on this device to upload — use Download from cloud instead');
+      return;
+    }
+
     setSyncing(true);
     const result = await pushLocalDataToSupabase();
     setVerification(result.verification ?? null);
@@ -83,9 +93,28 @@ export default function SyncHealthPanel() {
     toast.error(result.message || 'Upload failed');
   };
 
+  const handleDownloadFromCloud = async () => {
+    setSyncing(true);
+    const result = await pullFromCloud(false);
+    setSyncing(false);
+
+    if (result.ok) {
+      toast.success(result.message || 'Downloaded shop data from cloud');
+      await runVerify();
+      return;
+    }
+
+    toast.error(result.message || 'Could not download from cloud');
+  };
+
   const busy = loading || syncing || status === 'syncing';
-  const allSynced = verification?.ok === true;
+  const hasVerificationError = Boolean(verification?.error);
   const unsynced = verification?.unsynced ?? [];
+  const needsCloudDownload =
+    verification != null &&
+    verification.uploadComplete &&
+    verification.cloudHasMoreRecords;
+  const allSynced = verification?.ok === true && !hasVerificationError;
 
   return (
     <div className="space-y-3 rounded-lg border p-3">
@@ -99,12 +128,28 @@ export default function SyncHealthPanel() {
         ) : (
           <Badge variant="destructive" className="text-xs gap-1">
             <AlertTriangle className="w-3 h-3" />
-            {unsynced.length > 0
-              ? `${unsynced.length} not in cloud`
-              : 'Not verified'}
+            {hasVerificationError
+              ? 'Account mismatch'
+              : needsCloudDownload
+                ? 'Download needed'
+                : unsynced.length > 0
+                  ? `${unsynced.length} not in cloud`
+                  : 'Counts differ'}
           </Badge>
         )}
       </div>
+
+      {verification?.error && (
+        <p className="text-xs text-destructive">{verification.error}</p>
+      )}
+
+      {needsCloudDownload && (
+        <p className="text-xs text-amber-700 dark:text-amber-300">
+          Your shop data is safe in the cloud (from another device). This device is
+          empty — download from cloud. Do not use Upload; it cannot copy cloud data
+          to this device.
+        </p>
+      )}
 
       {lastVerifiedAt && (
         <p className="text-xs text-muted-foreground">
@@ -181,7 +226,26 @@ export default function SyncHealthPanel() {
           )}
         </Button>
 
-        {unsynced.length > 0 ? (
+        {needsCloudDownload ? (
+          <Button
+            size="sm"
+            className="w-full"
+            disabled={busy || !isOnline}
+            onClick={handleDownloadFromCloud}
+          >
+            {syncing ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                Downloading…
+              </>
+            ) : (
+              <>
+                <CloudDownload className="w-4 h-4 mr-2" />
+                Download from cloud
+              </>
+            )}
+          </Button>
+        ) : unsynced.length > 0 ? (
           <Button
             size="sm"
             className="w-full"
@@ -202,7 +266,7 @@ export default function SyncHealthPanel() {
             variant="secondary"
             size="sm"
             className="w-full"
-            disabled={busy || !isOnline}
+            disabled={busy || !isOnline || isLocalTenantDataEmpty()}
             onClick={handleUploadAll}
           >
             {syncing ? (

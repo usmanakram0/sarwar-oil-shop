@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Outlet } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { hydrateShopStorage, resetShopStorageSession } from '@/lib/persistence/shopStorage';
-import { clearStorageCache } from '@/lib/storage';
+import { clearStorageCache, normalizeStoredDailySlipNumbers } from '@/lib/storage';
 import PageLoader from '@/components/layout/PageLoader';
 
 export default function ShopStorageProvider() {
@@ -24,6 +24,7 @@ export default function ShopStorageProvider() {
 
     void hydrateShopStorage(session.tenantId).then(() => {
       if (cancelled) return;
+      normalizeStoredDailySlipNumbers();
       clearStorageCache();
       setReady(true);
     });

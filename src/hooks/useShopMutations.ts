@@ -22,6 +22,7 @@ import {
   resolveOrderTimestamp,
 } from '@/lib/historicalEntry';
 import { type InvoiceCloseOptions } from '@/lib/invoiceLifecycle';
+import { applyDailySlipRenumbering } from '@/lib/dailySlipNumber';
 import {
   applyStockDeltasToProducts,
   buildStockDeltaMap,
@@ -450,10 +451,17 @@ export function useInvoiceMutations() {
               ? `Customer returned order ${invoice.invoiceNumber}`
               : `Voided mistaken invoice ${invoice.invoiceNumber}`,
           updatedAt: closedAt,
+          dailySlipNumber: undefined,
         };
 
-        updateListItem(queryKeys.invoices, id, () => closedInvoice);
-        setSingleEntity(queryKeys.invoice(id), closedInvoice);
+        const renumbered = applyDailySlipRenumbering(
+          invoices.map((entry) => (entry.id === id ? closedInvoice : entry)),
+        );
+        queryClient.setQueryData<Invoice[]>(queryKeys.invoices, renumbered);
+        const updatedClosed = renumbered.find((entry) => entry.id === id);
+        if (updatedClosed) {
+          setSingleEntity(queryKeys.invoice(id), updatedClosed);
+        }
 
         queryClient.setQueryData<Payment[]>(queryKeys.payments, old =>
           (old ?? []).filter(p => p.invoiceId !== id)

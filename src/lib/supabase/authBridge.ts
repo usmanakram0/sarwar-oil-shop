@@ -17,7 +17,7 @@ function profileFromMetadata(
   const tenantId =
     typeof meta.tenant_id === 'string' && meta.tenant_id.trim()
       ? meta.tenant_id.trim()
-      : 'tenant-1';
+      : '';
   const firstName =
     typeof meta.first_name === 'string' ? meta.first_name.trim() : '';
   const lastName =

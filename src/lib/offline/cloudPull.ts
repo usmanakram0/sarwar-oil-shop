@@ -14,6 +14,7 @@ import type {
 import { normalizeProductType, type CartonSize, type ProductType } from '@/lib/productTypes';
 import { supabase } from '@/lib/supabase/client';
 import { withNetworkRetry } from '@/lib/offline/network';
+import { getLocalTenantIdForSync } from '@/lib/offline/cloudTenant';
 
 function asString(value: unknown, fallback = ''): string {
   if (typeof value === 'string') return value;
@@ -222,8 +223,15 @@ function unmapSettings(row: Record<string, unknown> | null): ShopSettings {
 
 async function fetchTenantRows(table: string): Promise<Record<string, unknown>[]> {
   if (!supabase) return [];
+
+  const tenantId = getLocalTenantIdForSync();
+  if (!tenantId) return [];
+
   const result = await withNetworkRetry(async () => {
-    const response = await supabase!.from(table).select('*');
+    const response = await supabase!
+      .from(table)
+      .select('*')
+      .eq('tenant_id', tenantId);
     if (response.error) throw new Error(`${table}: ${response.error.message}`);
     return response;
   });

@@ -27,6 +27,7 @@ import {
   countCloudSnapshotRecords,
   fetchTenantSnapshotFromCloud,
 } from '@/lib/offline/cloudPull';
+import { assertTenantIsolation } from '@/lib/offline/cloudTenant';
 import {
   clearTenantDataDirty,
   emitSyncStatus,
@@ -331,6 +332,12 @@ async function ensureCloudAuthSession(): Promise<{
     }
   }
 
+  const isolation = await assertTenantIsolation();
+  if (!isolation.ok) {
+    emitSyncStatus({ state: 'error', message: isolation.message });
+    return { ok: false, message: isolation.message };
+  }
+
   return { ok: true };
 }
 
@@ -470,7 +477,7 @@ async function runPushWithVerification(options: {
 
     const verification = await verifyLocalVsCloud();
 
-    if (!verification.ok) {
+    if (!verification.uploadComplete) {
       const message = `${verification.unsynced.length} record(s) still not in cloud after upload. See Settings → Sync status.`;
       const emergencyBackupSaved = saveEmergencyBackup('sync-incomplete');
       emitSyncStatus({ state: 'error', message });
@@ -480,6 +487,30 @@ async function runPushWithVerification(options: {
         message,
         verification,
         emergencyBackupSaved,
+      };
+    }
+
+    if (verification.cloudHasMoreRecords) {
+      clearTenantDataDirty();
+      const message =
+        'All device records are in cloud. Cloud has more data on another device — use Download from cloud in Settings.';
+      emitSyncStatus({ state: 'idle', message });
+      return {
+        ok: true,
+        message,
+        verification,
+      };
+    }
+
+    if (!verification.countsMatch) {
+      const message =
+        'Upload finished but device and cloud counts still differ. Verify in Settings → Sync status.';
+      emitSyncStatus({ state: 'error', message });
+      markTenantDataDirty();
+      return {
+        ok: false,
+        message,
+        verification,
       };
     }
 
@@ -587,6 +618,10 @@ export async function runSyncIfNeeded(): Promise<void> {
   }
   if (!getSession()) return;
   if (!isTenantDataDirty()) return;
+  if (isLocalTenantDataEmpty()) {
+    clearTenantDataDirty();
+    return;
+  }
   await pushLocalDataToSupabase();
 }
 

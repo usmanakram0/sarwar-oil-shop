@@ -1,6 +1,6 @@
 import { format } from 'date-fns';
 import { formatMoney } from '@/lib/currency';
-import { getInvoiceDiscountAmount, type Invoice } from '@/lib/storage';
+import { getInvoiceDiscountAmount, invoiceStorage, type Invoice } from '@/lib/storage';
 import { getInvoiceSlipLabel } from '@/lib/dailySlipNumber';
 import { formatLineItemQuantityWithUnit } from '@/lib/productTypes';
 import { getInvoiceCustomerName } from '@/lib/walkingCustomer';
@@ -65,7 +65,7 @@ export function buildBillReceiptBody(context: InvoiceReceiptContext): string {
   const discountAmount = getInvoiceDiscountAmount(invoice);
   const remaining = invoice.remainingAmount ?? invoice.total - (invoice.paidAmount || 0);
   const customerName = getInvoiceCustomerName(invoice);
-  const slipLabel = getInvoiceSlipLabel(invoice);
+  const slipLabel = getInvoiceSlipLabel(invoice, invoiceStorage.getAll());
 
   const metaRows = buildMetaTableRows([
     ...(slipLabel ? [{ label: 'Slip No:', value: slipLabel }] : []),
@@ -124,7 +124,7 @@ export function buildBillReceiptBody(context: InvoiceReceiptContext): string {
 export function buildGatePassReceiptBody(context: InvoiceReceiptContext): string {
   const { shopName, shopAddress, shopPhone, invoice, customerPhone } = context;
   const customerName = getInvoiceCustomerName(invoice);
-  const slipLabel = getInvoiceSlipLabel(invoice);
+  const slipLabel = getInvoiceSlipLabel(invoice, invoiceStorage.getAll());
 
   const metaRows = buildMetaTableRows([
     ...(slipLabel ? [{ label: 'Slip No:', value: slipLabel }] : []),

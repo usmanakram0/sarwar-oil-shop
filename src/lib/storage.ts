@@ -27,7 +27,7 @@ import {
   type InvoiceCloseOptions,
 } from '@/lib/invoiceLifecycle';
 import { isWalkingCustomer } from '@/lib/walkingCustomer';
-import { getNextDailySlipNumber } from '@/lib/dailySlipNumber';
+import { getNextDailySlipNumber, applyDailySlipRenumbering } from '@/lib/dailySlipNumber';
 import {
   normalizeProductType,
   type CartonSize,
@@ -895,9 +895,11 @@ export const invoiceStorage = {
       stockRestoredOnClose: shouldRestoreStock,
       closureNote,
       updatedAt: closedAt,
+      dailySlipNumber: undefined,
     };
-    setAll('invoices', invoices);
-    return invoices[idx];
+    const renumbered = applyDailySlipRenumbering(invoices);
+    setAll('invoices', renumbered);
+    return renumbered.find((entry) => entry.id === id);
   },
   /** @deprecated Use closeInvoice — kept for compatibility */
   delete: (id: string): boolean => {
@@ -1476,6 +1478,14 @@ export function notifySettingsUpdated(): void {
 }
 
 /** Force-write the debounced local safety snapshot (e.g. before tab close). */
+export function normalizeStoredDailySlipNumbers(): void {
+  const invoices = invoiceStorage.getAll();
+  const renumbered = applyDailySlipRenumbering(invoices);
+  if (renumbered === invoices) return;
+  setAllSilent('invoices', renumbered);
+  invalidateShopQueries('invoices');
+}
+
 export function flushLocalDataSnapshot(): void {
   flushTenantAutosave(buildTenantAutosaveSnapshot);
   void flushPendingWrites();

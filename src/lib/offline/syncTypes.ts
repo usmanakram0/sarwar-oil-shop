@@ -42,9 +42,16 @@ export interface TableSyncCounts {
 
 export interface SyncVerificationResult {
   ok: boolean;
+  /** Every local record exists in cloud (upload succeeded). */
+  uploadComplete: boolean;
+  /** Device and cloud have the same record counts per table. */
+  countsMatch: boolean;
+  /** Cloud has more records than this device (download may be needed). */
+  cloudHasMoreRecords: boolean;
   verifiedAt: string;
   counts: TableSyncCounts[];
   unsynced: UnsyncedRecord[];
+  error?: string;
 }
 
 export interface SyncPushResult {

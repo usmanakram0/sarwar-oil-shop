@@ -1,6 +1,10 @@
 import { getSession } from '@/lib/auth';
 import { isSupabaseConfigured, supabase } from '@/lib/supabase/client';
 import {
+  assertTenantIsolation,
+  getLocalTenantIdForSync,
+} from '@/lib/offline/cloudTenant';
+import {
   customerStorage,
   invoiceStorage,
   paymentStorage,
@@ -19,13 +23,23 @@ import {
   type UnsyncedRecord,
 } from '@/lib/offline/syncTypes';
 
-const LAST_VERIFIED_KEY = 'oilshop_last_verified_at';
+const LAST_VERIFIED_KEY_PREFIX = 'oilshop_last_verified_at_';
 
-async function fetchCloudIds(table: SyncTableName): Promise<Set<string>> {
+function lastVerifiedStorageKey(tenantId: string): string {
+  return `${LAST_VERIFIED_KEY_PREFIX}${tenantId}`;
+}
+
+async function fetchCloudIds(
+  table: SyncTableName,
+  tenantId: string,
+): Promise<Set<string>> {
   if (!supabase) return new Set();
 
   const result = await withNetworkRetry(async () => {
-    const response = await supabase!.from(table).select('id');
+    const response = await supabase!
+      .from(table)
+      .select('id')
+      .eq('tenant_id', tenantId);
     if (response.error) throw new Error(`${table}: ${response.error.message}`);
     return response;
   });
@@ -70,32 +84,70 @@ function getLocalRecords(table: SyncTableName): Array<{ id: string; label: strin
 }
 
 export function getLastVerifiedAt(): string | null {
-  return localStorage.getItem(LAST_VERIFIED_KEY);
+  const tenantId = getLocalTenantIdForSync();
+  if (!tenantId) return null;
+  return localStorage.getItem(lastVerifiedStorageKey(tenantId));
+}
+
+function buildVerificationResult(
+  counts: TableSyncCounts[],
+  unsynced: UnsyncedRecord[],
+  verifiedAt: string,
+  error?: string,
+): SyncVerificationResult {
+  const localTotal = counts.reduce((sum, row) => sum + row.local, 0);
+  const cloudTotal = counts.reduce((sum, row) => sum + row.cloud, 0);
+  const uploadComplete = unsynced.length === 0;
+  const countsMatch = counts.every((row) => row.local === row.cloud);
+  const cloudHasMoreRecords = cloudTotal > localTotal;
+
+  const result: SyncVerificationResult = {
+    ok: uploadComplete && countsMatch && !error,
+    uploadComplete,
+    countsMatch,
+    cloudHasMoreRecords,
+    verifiedAt,
+    counts,
+    unsynced,
+    error,
+  };
+
+  if (result.ok) {
+    const tenantId = getLocalTenantIdForSync();
+    if (tenantId) {
+      localStorage.setItem(lastVerifiedStorageKey(tenantId), verifiedAt);
+    }
+  }
+
+  return result;
 }
 
 export async function verifyLocalVsCloud(): Promise<SyncVerificationResult> {
   const verifiedAt = new Date().toISOString();
+  const session = getSession();
+  const emptyCounts = SYNC_TABLE_ORDER.map((table) => ({
+    table,
+    label: SYNC_TABLE_LABELS[table],
+    local: getLocalRecords(table).length,
+    cloud: 0,
+  }));
 
-  if (!isSupabaseConfigured || !supabase || !getSession()) {
-    return {
-      ok: false,
-      verifiedAt,
-      counts: SYNC_TABLE_ORDER.map((table) => ({
-        table,
-        label: SYNC_TABLE_LABELS[table],
-        local: getLocalRecords(table).length,
-        cloud: 0,
-      })),
-      unsynced: [],
-    };
+  if (!isSupabaseConfigured || !supabase || !session) {
+    return buildVerificationResult(emptyCounts, [], verifiedAt);
   }
 
+  const isolation = await assertTenantIsolation();
+  if (!isolation.ok) {
+    return buildVerificationResult(emptyCounts, [], verifiedAt, isolation.message);
+  }
+
+  const tenantId = isolation.tenantId;
   const counts: TableSyncCounts[] = [];
   const unsynced: UnsyncedRecord[] = [];
 
   for (const table of SYNC_TABLE_ORDER) {
     const localRecords = getLocalRecords(table);
-    const cloudIds = await fetchCloudIds(table);
+    const cloudIds = await fetchCloudIds(table, tenantId);
 
     counts.push({
       table,
@@ -115,18 +167,7 @@ export async function verifyLocalVsCloud(): Promise<SyncVerificationResult> {
     }
   }
 
-  const result: SyncVerificationResult = {
-    ok: unsynced.length === 0,
-    verifiedAt,
-    counts,
-    unsynced,
-  };
-
-  if (result.ok) {
-    localStorage.setItem(LAST_VERIFIED_KEY, verifiedAt);
-  }
-
-  return result;
+  return buildVerificationResult(counts, unsynced, verifiedAt);
 }
 
 export function groupUnsyncedByTable(

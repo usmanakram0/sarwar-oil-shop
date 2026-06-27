@@ -311,15 +311,20 @@ export async function login(
   const user = users.find(u => u.email.toLowerCase() === normalizedEmail);
 
   if (user && user.password === password) {
-    const session = persistLoginSession(user);
+    const cloudResult = await signInSupabaseWithProfile(user.email, password);
+    let activeUser = user;
+    if (cloudResult.ok && cloudResult.profile) {
+      activeUser = upsertLocalUserFromCloud(users, cloudResult.profile, password);
+    }
 
-    const supabaseResult = await signInSupabaseIfOnline(user.email, password);
-    if (supabaseResult.ok) {
+    const session = persistLoginSession(activeUser);
+
+    if (cloudResult.ok) {
       void runSyncIfNeeded();
       return { success: true, session };
     }
 
-    if (supabaseResult.error === 'offline-or-unconfigured') {
+    if (cloudResult.error === 'offline-or-unconfigured') {
       return { success: true, session };
     }
 

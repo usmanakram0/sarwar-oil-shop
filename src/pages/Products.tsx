@@ -27,13 +27,17 @@ import { useProductsList } from "@/hooks/useShopData";
 import { useProductMutations } from "@/hooks/useShopMutations";
 import { usePagination } from "@/hooks/usePagination";
 import {
+  CAN_SIZES,
   CARTON_SIZES,
   PRODUCT_TYPES,
+  buildCanProductName,
   formatProductPriceSuffix,
   formatStockLabel,
+  isCanProduct,
   isCartonProduct,
   normalizeProductType,
   productTypeBadgeLabel,
+  type CanSize,
   type CartonSize,
   type ProductType,
 } from "@/lib/productTypes";
@@ -69,6 +73,8 @@ export default function Products() {
 
   const watchedType = form.watch("productType");
   const isCartonForm = watchedType === "carton";
+  const isCanForm = watchedType === "can";
+  const isUnitForm = isCartonForm || isCanForm;
 
   const filtered = useMemo(() => {
     return products.filter((p) => {
@@ -108,7 +114,10 @@ export default function Products() {
     form.reset({
       name: product.name,
       productType,
-      cartonSize: productType === "carton" ? product.cartonSize : undefined,
+      cartonSize:
+        productType === "carton" || productType === "can"
+          ? product.cartonSize
+          : undefined,
       pricePerLiter: product.pricePerLiter,
       stock: product.stock,
     });
@@ -116,10 +125,19 @@ export default function Products() {
   };
 
   const onSubmit = (data: ProductFormData) => {
+    const productType = normalizeProductType(data.productType);
+    const resolvedName =
+      productType === "can" && data.cartonSize
+        ? buildCanProductName(data.cartonSize as CanSize)
+        : data.name.trim();
+
     const payload: Omit<Product, "id" | "createdAt" | "updatedAt"> = {
-      name: data.name,
-      productType: data.productType,
-      cartonSize: data.productType === "carton" ? data.cartonSize : undefined,
+      name: resolvedName,
+      productType,
+      cartonSize:
+        productType === "carton" || productType === "can"
+          ? data.cartonSize
+          : undefined,
       pricePerLiter: data.pricePerLiter,
       stock: data.stock,
     };
@@ -139,18 +157,22 @@ export default function Products() {
     }
 
     const exists = products.find((p) => {
-      if (p.name.toLowerCase() !== data.name.toLowerCase()) return false;
-      if (normalizeProductType(p.productType) !== data.productType)
-        return false;
-      if (data.productType === "carton") {
+      if (normalizeProductType(p.productType) !== productType) return false;
+      if (productType === "can") {
+        return p.cartonSize === data.cartonSize;
+      }
+      if (p.name.toLowerCase() !== resolvedName.toLowerCase()) return false;
+      if (productType === "carton") {
         return p.cartonSize === data.cartonSize;
       }
       return true;
     });
     if (exists) {
-      form.setError("name", {
-        message: "Product with this name already exists",
-      });
+      const message =
+        productType === "can"
+          ? "This can size already exists"
+          : "Product with this name already exists";
+      form.setError(productType === "can" ? "cartonSize" : "name", { message });
       return;
     }
 
@@ -253,6 +275,11 @@ export default function Products() {
                           {product.cartonSize}
                         </Badge>
                       )}
+                      {isCanProduct(product) && product.cartonSize && (
+                        <Badge variant="secondary" className="text-xs">
+                          {product.cartonSize}
+                        </Badge>
+                      )}
                     </div>
                     <h3 className="font-heading font-semibold">
                       {product.name}
@@ -315,17 +342,19 @@ export default function Products() {
             </DialogTitle>
           </DialogHeader>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-            <div>
-              <FormLabel htmlFor="name" required>
-                Product Name
-              </FormLabel>
-              <Input id="name" {...form.register("name")} />
-              {form.formState.errors.name && (
-                <p className="text-xs text-destructive mt-1">
-                  {form.formState.errors.name.message}
-                </p>
-              )}
-            </div>
+            {!isCanForm && (
+              <div>
+                <FormLabel htmlFor="name" required>
+                  Product Name
+                </FormLabel>
+                <Input id="name" {...form.register("name")} />
+                {form.formState.errors.name && (
+                  <p className="text-xs text-destructive mt-1">
+                    {form.formState.errors.name.message}
+                  </p>
+                )}
+              </div>
+            )}
 
             <div>
               <FormLabel required>Product Type</FormLabel>
@@ -379,12 +408,42 @@ export default function Products() {
               </div>
             )}
 
+            {isCanForm && (
+              <div>
+                <FormLabel required>Can Size (Liters)</FormLabel>
+                <Select
+                  value={form.watch("cartonSize") ?? ""}
+                  disabled={Boolean(editingProduct)}
+                  onValueChange={(v) =>
+                    form.setValue("cartonSize", v as CanSize)
+                  }>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select liters" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CAN_SIZES.map((size) => (
+                      <SelectItem key={size.value} value={size.value}>
+                        {size.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {form.formState.errors.cartonSize && (
+                  <p className="text-xs text-destructive mt-1">
+                    {form.formState.errors.cartonSize.message}
+                  </p>
+                )}
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <FormLabel htmlFor="price" required>
                   {isCartonForm
                     ? `Price per Carton (${cur})`
-                    : `Price per Liter (${cur})`}
+                    : isCanForm
+                      ? `Price per Can (${cur})`
+                      : `Price per Liter (${cur})`}
                 </FormLabel>
                 <Input
                   id="price"
@@ -401,13 +460,17 @@ export default function Products() {
               </div>
               <div>
                 <FormLabel htmlFor="stock">
-                  {isCartonForm ? "Stock (Cartons)" : "Stock (Liters)"}
+                  {isCartonForm
+                    ? "Stock (Cartons)"
+                    : isCanForm
+                      ? "Stock (Cans)"
+                      : "Stock (Liters)"}
                 </FormLabel>
                 <Input
                   id="stock"
                   type="number"
                   min={0}
-                  step={isCartonForm ? 1 : "any"}
+                  step={isUnitForm ? 1 : "any"}
                   placeholder="0"
                   {...form.register("stock")}
                 />

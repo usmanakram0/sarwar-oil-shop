@@ -18,11 +18,15 @@ import { type StockPurchase, type StockPurchaseItem } from "@/lib/storage";
 import { useProductsList, useSuppliersList } from "@/hooks/useShopData";
 import { useStockPurchaseMutations } from "@/hooks/useShopMutations";
 import {
+  CAN_SIZES,
   filterProductsByType,
+  findCanProductBySize,
   formatStockShort,
   productDisplayName,
+  type CanSize,
   type CartonSize,
   type ProductType,
+  type UnitSize,
 } from "@/lib/productTypes";
 import { toast } from "sonner";
 import { CURRENCY, formatMoney } from "@/lib/currency";
@@ -33,7 +37,7 @@ type DraftItem = {
   productType: ProductType;
   productId: string;
   productName: string;
-  cartonSize: CartonSize | "";
+  cartonSize: UnitSize | "";
   quantity: number;
   totalPrice: number;
   pricePerLiter: number;
@@ -97,6 +101,19 @@ export default function StockInCreate() {
       }
     }
 
+    if (patch.cartonSize !== undefined && item.productType === "can") {
+      const canSize = patch.cartonSize as CanSize;
+      const product = findCanProductBySize(products, canSize);
+      item.cartonSize = canSize;
+      if (product) {
+        item.productId = product.id;
+        item.productName = product.name;
+      } else {
+        item.productId = "";
+        item.productName = "";
+      }
+    }
+
     if (item.quantity > 0 && item.totalPrice > 0) {
       item.pricePerLiter = item.totalPrice / item.quantity;
     }
@@ -131,6 +148,16 @@ export default function StockInCreate() {
       return;
     }
 
+    const missingCan = validItems.find(
+      (item) => item.productType === "can" && !item.productId,
+    );
+    if (missingCan) {
+      toast.error(
+        `Add Can (${missingCan.cartonSize}) in Products before stock in`,
+      );
+      return;
+    }
+
     if (isHistorical) {
       const dateCheck = validateOrderDate(orderDate);
       if (!dateCheck.valid) {
@@ -161,7 +188,9 @@ export default function StockInCreate() {
       productName: i.productName.trim(),
       productType: i.productType,
       cartonSize:
-        i.productType === "carton" ? (i.cartonSize as CartonSize) : undefined,
+        i.productType === "carton" || i.productType === "can"
+          ? (i.cartonSize as UnitSize)
+          : undefined,
       quantity: i.quantity,
       pricePerLiter: i.pricePerLiter,
       total: i.totalPrice,
@@ -214,8 +243,18 @@ export default function StockInCreate() {
   const renderLine = (item: DraftItem, index: number) => {
     const typeProducts = filterProductsByType(products, item.productType);
     const isCarton = item.productType === "carton";
-    const qtyLabel = isCarton ? "Qty (cartons)" : "Qty (L)";
-    const rateLabel = isCarton ? "Rate/carton" : "Rate/L";
+    const isCan = item.productType === "can";
+    const isUnit = isCarton || isCan;
+    const qtyLabel = isCarton
+      ? "Qty (cartons)"
+      : isCan
+        ? "Qty (cans)"
+        : "Qty (L)";
+    const rateLabel = isCarton
+      ? "Rate/carton"
+      : isCan
+        ? "Rate/can"
+        : "Rate/L";
 
     return (
       <div
@@ -233,9 +272,30 @@ export default function StockInCreate() {
             <SelectContent>
               <SelectItem value="oil">Oil</SelectItem>
               <SelectItem value="carton">Carton</SelectItem>
+              <SelectItem value="can">Can</SelectItem>
             </SelectContent>
           </Select>
 
+          {isCan ? (
+            <div className="flex-1 min-w-[180px]">
+              <Select
+                value={item.cartonSize || ""}
+                onValueChange={(v) =>
+                  updateItem(index, { cartonSize: v as CanSize })
+                }>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select can size" />
+                </SelectTrigger>
+                <SelectContent>
+                  {CAN_SIZES.map((size) => (
+                    <SelectItem key={size.value} value={size.value}>
+                      Can · {size.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          ) : (
           <div className="flex-1 min-w-[180px]">
             <Select
               value={item.productId}
@@ -260,6 +320,7 @@ export default function StockInCreate() {
               </SelectContent>
             </Select>
           </div>
+          )}
 
           <Button
             variant="ghost"
@@ -279,7 +340,7 @@ export default function StockInCreate() {
             <Input
               type="number"
               min="0"
-              step={isCarton ? "1" : "0.01"}
+              step={isUnit ? "1" : "0.01"}
               value={item.quantity || ""}
               onChange={(e) =>
                 updateItem(index, { quantity: Number(e.target.value) })
@@ -417,6 +478,13 @@ export default function StockInCreate() {
               onClick={() => addItem("carton")}>
               <Plus className="w-4 h-4 mr-1" />
               Add carton
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => addItem("can")}>
+              <Plus className="w-4 h-4 mr-1" />
+              Add can
             </Button>
           </div>
         </CardHeader>

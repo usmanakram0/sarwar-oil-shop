@@ -1,9 +1,17 @@
 import { z } from 'zod';
 
+const unitSizeValues = [
+  '1 Liter',
+  '0.75 Liter',
+  '10 Liters',
+  '20 Liters',
+  '30 Liters',
+] as const;
+
 export const productSchema = z.object({
-  name: z.string().trim().min(2, 'Name must be at least 2 characters').max(50, 'Name must be less than 50 characters'),
-  productType: z.enum(['oil', 'carton']),
-  cartonSize: z.enum(['1 Liter', '0.75 Liter']).optional(),
+  name: z.string().trim().max(50, 'Name must be less than 50 characters'),
+  productType: z.enum(['oil', 'carton', 'can']),
+  cartonSize: z.enum(unitSizeValues).optional(),
   pricePerLiter: z.preprocess(
     (value) => (value === '' || value === null || value === undefined ? undefined : value),
     z.coerce
@@ -18,19 +26,57 @@ export const productSchema = z.object({
       .min(0, 'Stock cannot be negative'),
   ),
 }).superRefine((data, ctx) => {
-  if (data.productType === 'carton' && !data.cartonSize) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'Carton size is required',
-      path: ['cartonSize'],
-    });
+  if (data.productType === 'oil') {
+    if (data.name.length < 2) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Name must be at least 2 characters',
+        path: ['name'],
+      });
+    }
+    return;
   }
-  if (data.productType === 'carton' && !Number.isInteger(data.stock)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'Carton stock must be a whole number',
-      path: ['stock'],
-    });
+
+  if (data.productType === 'carton') {
+    if (data.name.length < 2) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Name must be at least 2 characters',
+        path: ['name'],
+      });
+    }
+    if (!data.cartonSize || !['1 Liter', '0.75 Liter'].includes(data.cartonSize)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Carton size is required',
+        path: ['cartonSize'],
+      });
+    }
+    if (!Number.isInteger(data.stock)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Carton stock must be a whole number',
+        path: ['stock'],
+      });
+    }
+    return;
+  }
+
+  if (data.productType === 'can') {
+    if (!data.cartonSize || !['10 Liters', '20 Liters', '30 Liters'].includes(data.cartonSize)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Can size is required',
+        path: ['cartonSize'],
+      });
+    }
+    if (!Number.isInteger(data.stock)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Can stock must be a whole number',
+        path: ['stock'],
+      });
+    }
   }
 });
 

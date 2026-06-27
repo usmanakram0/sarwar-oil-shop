@@ -1,5 +1,5 @@
 import type { Product } from '@/lib/storage';
-import { isCartonProduct } from '@/lib/productTypes';
+import { isUnitCountedProduct } from '@/lib/productTypes';
 
 export class StockMovementError extends Error {
   constructor(message: string) {
@@ -20,7 +20,7 @@ export function roundStockLevel(
   if (stock < 0) {
     throw new StockMovementError('Stock cannot be negative');
   }
-  if (isCartonProduct(product)) {
+  if (isUnitCountedProduct(product)) {
     return Math.round(stock);
   }
   return Math.round(stock * OIL_STOCK_SCALE) / OIL_STOCK_SCALE;
@@ -34,10 +34,10 @@ export function normalizeLineQuantity(
   if (!Number.isFinite(quantity) || quantity <= 0) {
     throw new StockMovementError('Quantity must be greater than 0');
   }
-  if (isCartonProduct(product)) {
+  if (isUnitCountedProduct(product)) {
     const whole = Math.round(quantity);
     if (Math.abs(quantity - whole) > 1e-9) {
-      throw new StockMovementError('Carton quantity must be a whole number');
+      throw new StockMovementError('Quantity must be a whole number of units');
     }
     return whole;
   }
@@ -97,7 +97,9 @@ export function validateStockDeltas(
       throw new StockMovementError('Product not found for stock update');
     }
 
-    const unit = isCartonProduct(product) ? 'cartons' : 'L';
+    let unit = 'L';
+    if (product.productType === 'carton') unit = 'cartons';
+    if (product.productType === 'can') unit = 'cans';
     const needed = normalizeLineQuantity(product, Math.abs(delta));
     const available = roundStockLevel(product, product.stock);
 

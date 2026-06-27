@@ -289,6 +289,10 @@ export default function InvoiceEdit() {
               <Plus className="w-4 h-4 mr-1" />
               Add carton
             </Button>
+            <Button size="sm" variant="outline" onClick={() => addItem('can')}>
+              <Plus className="w-4 h-4 mr-1" />
+              Add can
+            </Button>
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -301,20 +305,28 @@ export default function InvoiceEdit() {
             const lineType = normalizeProductType(item.productType);
             const lineProducts = filterProductsByType(products, lineType);
             const isCartonLine = lineType === 'carton';
+            const isCanLine = lineType === 'can';
+            const isUnitLine = isCartonLine || isCanLine;
+            const lineLabel = isCartonLine ? 'Carton' : isCanLine ? 'Can' : 'Oil';
+            const selectPlaceholder = isCartonLine
+              ? 'carton'
+              : isCanLine
+                ? 'can'
+                : 'oil';
             return (
               <div
                 key={index}
                 className="p-3 rounded-lg bg-muted/30 border border-border/50 space-y-2">
                 <div className="flex gap-2 items-center">
                   <span className="text-xs font-medium text-muted-foreground px-2 py-1 rounded bg-background border">
-                    {isCartonLine ? 'Carton' : 'Oil'}
+                    {lineLabel}
                   </span>
                   <div className="flex-1">
                     <Select
                       value={item.productId}
                       onValueChange={(value) => updateItem(index, 'productId', value)}>
                       <SelectTrigger>
-                        <SelectValue placeholder={`Select ${isCartonLine ? 'carton' : 'oil'}`} />
+                        <SelectValue placeholder={`Select ${selectPlaceholder}`} />
                       </SelectTrigger>
                       <SelectContent>
                         {lineProducts.map((product) => (
@@ -354,7 +366,7 @@ export default function InvoiceEdit() {
                     <Input
                       type="number"
                       min="1"
-                      step={isCartonLine ? '1' : '0.01'}
+                      step={isUnitLine ? '1' : '0.01'}
                       value={item.quantity || ''}
                       onChange={(event) =>
                         updateItem(index, 'quantity', event.target.value)

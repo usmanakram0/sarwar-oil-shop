@@ -2,7 +2,9 @@ import { isToday } from "date-fns";
 import type { Invoice } from "@/lib/storage";
 import { isActiveSale } from "@/lib/invoiceLifecycle";
 import {
+  isCanProduct,
   isCartonProduct,
+  isOilProduct,
   normalizeProductType,
   type ProductType,
 } from "@/lib/productTypes";
@@ -48,7 +50,7 @@ export function getTodayProductSales(invoices: Invoice[]): TodayProductSale[] {
 
 export function getTodayTotalLiters(invoices: Invoice[]): number {
   return getTodayProductSales(invoices)
-    .filter((p) => !isCartonProduct(p))
+    .filter((p) => isOilProduct(p))
     .reduce((sum, product) => sum + product.quantity, 0);
 }
 
@@ -58,12 +60,22 @@ export function getTodayTotalCartons(invoices: Invoice[]): number {
     .reduce((sum, product) => sum + product.quantity, 0);
 }
 
+export function getTodayTotalCans(invoices: Invoice[]): number {
+  return getTodayProductSales(invoices)
+    .filter((p) => isCanProduct(p))
+    .reduce((sum, product) => sum + product.quantity, 0);
+}
+
 export function getTodayOilProductSales(invoices: Invoice[]): TodayProductSale[] {
-  return getTodayProductSales(invoices).filter((product) => !isCartonProduct(product));
+  return getTodayProductSales(invoices).filter((product) => isOilProduct(product));
 }
 
 export function getTodayCartonProductSales(invoices: Invoice[]): TodayProductSale[] {
   return getTodayProductSales(invoices).filter((product) => isCartonProduct(product));
+}
+
+export function getTodayCanProductSales(invoices: Invoice[]): TodayProductSale[] {
+  return getTodayProductSales(invoices).filter((product) => isCanProduct(product));
 }
 
 export function formatLiters(quantity: number): string {
@@ -78,9 +90,17 @@ export function formatCartons(quantity: number): string {
   return `${displayValue.toLocaleString()} carton${displayValue === 1 ? '' : 's'}`;
 }
 
+export function formatCans(quantity: number): string {
+  const displayValue = Math.round(quantity);
+  return `${displayValue.toLocaleString()} can${displayValue === 1 ? '' : 's'}`;
+}
+
 export function formatSaleQuantity(sale: TodayProductSale): string {
   if (isCartonProduct(sale)) {
     return formatCartons(sale.quantity);
+  }
+  if (isCanProduct(sale)) {
+    return formatCans(sale.quantity);
   }
   return formatLiters(sale.quantity);
 }

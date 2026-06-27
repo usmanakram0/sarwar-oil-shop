@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { Droplets, Package } from "lucide-react";
+import { Droplets, Package, Cylinder } from "lucide-react";
 import { format } from "date-fns";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -12,11 +12,14 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { Invoice } from "@/lib/storage";
 import {
+  formatCans,
   formatCartons,
   formatLiters,
   formatSaleQuantity,
+  getTodayCanProductSales,
   getTodayCartonProductSales,
   getTodayOilProductSales,
+  getTodayTotalCans,
   getTodayTotalCartons,
   getTodayTotalLiters,
   type TodayProductSale,
@@ -129,6 +132,7 @@ export default function TodaySalesBreakdown({
 }: TodaySalesBreakdownProps) {
   const [oilOpen, setOilOpen] = useState(false);
   const [cartonOpen, setCartonOpen] = useState(false);
+  const [canOpen, setCanOpen] = useState(false);
 
   const todayOilSales = useMemo(
     () => getTodayOilProductSales(invoices),
@@ -136,6 +140,10 @@ export default function TodaySalesBreakdown({
   );
   const todayCartonSales = useMemo(
     () => getTodayCartonProductSales(invoices),
+    [invoices],
+  );
+  const todayCanSales = useMemo(
+    () => getTodayCanProductSales(invoices),
     [invoices],
   );
   const todayTotalLiters = useMemo(
@@ -146,10 +154,14 @@ export default function TodaySalesBreakdown({
     () => getTodayTotalCartons(invoices),
     [invoices],
   );
+  const todayTotalCans = useMemo(
+    () => getTodayTotalCans(invoices),
+    [invoices],
+  );
 
   return (
     <>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
         <SalesSummaryCard
           icon={<Droplets className="w-5 h-5 text-primary" />}
           label="Oil Sale Today"
@@ -161,6 +173,12 @@ export default function TodaySalesBreakdown({
           label="Carton Sale Today"
           value={formatCartons(todayTotalCartons)}
           onClick={() => setCartonOpen(true)}
+        />
+        <SalesSummaryCard
+          icon={<Cylinder className="w-5 h-5 text-primary" />}
+          label="Can Sale Today"
+          value={formatCans(todayTotalCans)}
+          onClick={() => setCanOpen(true)}
         />
         <TodayInvoiceSlips invoices={invoices} />
       </div>
@@ -181,6 +199,15 @@ export default function TodaySalesBreakdown({
         totalLabel={formatCartons(todayTotalCartons)}
         products={todayCartonSales}
         emptyMessage="No carton sales recorded today"
+      />
+
+      <SalesBreakdownDialog
+        open={canOpen}
+        onOpenChange={setCanOpen}
+        title="Today's Can Sales"
+        totalLabel={formatCans(todayTotalCans)}
+        products={todayCanSales}
+        emptyMessage="No can sales recorded today"
       />
     </>
   );

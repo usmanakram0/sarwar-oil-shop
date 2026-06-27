@@ -581,7 +581,10 @@ export const productStorage = {
     const newProduct: Product = {
       ...product,
       productType,
-      cartonSize: productType === 'carton' ? product.cartonSize : undefined,
+      cartonSize:
+        productType === 'carton' || productType === 'can'
+          ? product.cartonSize
+          : undefined,
       category: product.category ?? '',
       stock,
       id: generateId(),
@@ -606,6 +609,10 @@ export const productStorage = {
       ...current,
       ...updates,
       productType,
+      cartonSize:
+        productType === 'carton' || productType === 'can'
+          ? updates.cartonSize ?? current.cartonSize
+          : undefined,
       stock: nextStock,
       updatedAt: new Date().toISOString(),
     };

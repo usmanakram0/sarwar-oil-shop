@@ -47,6 +47,7 @@ import {
   reconcileCloudDeletionsWithLocal,
 } from '@/lib/offline/syncDeletions';
 import { flushPendingWrites } from '@/lib/persistence/shopStorage';
+import { checkCloudSchemaReady } from '@/lib/offline/syncSchemaCheck';
 import {
   groupUnsyncedByTable,
   verifyLocalVsCloud,

@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, CloudDownload, Loader2, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { getLastVerifiedAt,
+import {
+  getLastVerifiedAt,
   pushLocalDataToSupabase,
   pushUnsyncedToSupabase,
   verifySyncWithCloud,
@@ -14,6 +15,13 @@ import { getSession } from '@/lib/auth';
 import { isLocalTenantDataEmpty } from '@/lib/storage';
 import { toast } from 'sonner';
 
+function verificationErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+  return 'Could not verify cloud sync';
+}
+
 export default function SyncHealthPanel() {
   const { isOnline, status, pullFromCloud } = useSync();
   const tenantId = getSession()?.tenantId;
@@ -22,34 +30,86 @@ export default function SyncHealthPanel() {
   );
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const verifyRequestId = useRef(0);
   const lastVerifiedAt = getLastVerifiedAt();
 
-  const runVerify = useCallback(async () => {
-    if (!isOnline) {
-      toast.error('You are offline — connect to verify cloud sync');
-      return;
-    }
+  const runVerify = useCallback(
+    async (options?: { showLoading?: boolean; showToasts?: boolean }) => {
+      const showLoading = options?.showLoading !== false;
+      const showToasts = options?.showToasts !== false;
 
-    setLoading(true);
-    const result = await verifySyncWithCloud();
-    setVerification(result);
-    setLoading(false);
+      if (!isOnline) {
+        if (showToasts) {
+          toast.error('You are offline — connect to verify cloud sync');
+        }
+        return;
+      }
 
-    if (result.ok) {
-      toast.success('Device and cloud are fully in sync');
-    } else if (result.cloudHasMoreRecords && isLocalTenantDataEmpty()) {
-      toast.info('Cloud has your shop data — download it to this device');
-    } else if (result.cloudHasMoreRecords) {
-      toast.info('Cloud has extra records — upload to sync deletions from this device');
-    } else if (result.unsynced.length > 0) {
-      toast.error(
-        `${result.unsynced.length} record(s) not found in cloud — see list below`
-      );
-    }
-  }, [isOnline]);
+      const requestId = verifyRequestId.current + 1;
+      verifyRequestId.current = requestId;
+
+      if (showLoading) {
+        setLoading(true);
+      }
+
+      try {
+        const result = await verifySyncWithCloud();
+        if (verifyRequestId.current !== requestId) return;
+
+        setVerification(result);
+
+        if (!showToasts) return;
+
+        if (result.error) {
+          toast.error(result.error);
+          return;
+        }
+
+        if (result.ok) {
+          toast.success('Device and cloud are fully in sync');
+        } else if (result.cloudHasMoreRecords && isLocalTenantDataEmpty()) {
+          toast.info('Cloud has your shop data — download it to this device');
+        } else if (result.cloudHasMoreRecords) {
+          toast.info(
+            'Cloud has extra records — upload to sync deletions from this device'
+          );
+        } else if (result.unsynced.length > 0) {
+          toast.error(
+            `${result.unsynced.length} record(s) not found in cloud — see list below`
+          );
+        }
+      } catch (error) {
+        if (verifyRequestId.current !== requestId) return;
+
+        const message = verificationErrorMessage(error);
+        setVerification((current) =>
+          current ?? {
+            ok: false,
+            uploadComplete: false,
+            countsMatch: false,
+            cloudHasMoreRecords: false,
+            verifiedAt: new Date().toISOString(),
+            counts: [],
+            unsynced: [],
+            error: message,
+          }
+        );
+        if (showToasts) {
+          toast.error(message);
+        }
+      } finally {
+        if (verifyRequestId.current === requestId && showLoading) {
+          setLoading(false);
+        }
+      }
+    },
+    [isOnline]
+  );
 
   useEffect(() => {
-    if (isOnline && tenantId) void runVerify();
+    if (isOnline && tenantId) {
+      void runVerify({ showLoading: false, showToasts: false });
+    }
   }, [isOnline, tenantId, runVerify]);
 
   const handleUploadAll = async () => {
@@ -59,57 +119,73 @@ export default function SyncHealthPanel() {
     }
 
     setSyncing(true);
-    const result = await pushLocalDataToSupabase();
-    setVerification(result.verification ?? null);
-    setSyncing(false);
+    try {
+      const result = await pushLocalDataToSupabase();
+      setVerification(result.verification ?? null);
 
-    if (result.emergencyBackupSaved) {
-      toast.warning('Emergency backup downloaded because upload failed');
+      if (result.emergencyBackupSaved) {
+        toast.warning('Emergency backup downloaded because upload failed');
+      }
+
+      if (result.ok) {
+        toast.success(result.message || 'Synced to cloud');
+        return;
+      }
+
+      toast.error(result.message || 'Sync failed');
+    } catch (error) {
+      toast.error(verificationErrorMessage(error));
+    } finally {
+      setSyncing(false);
     }
-
-    if (result.ok) {
-      toast.success(result.message || 'Synced to cloud');
-      return;
-    }
-
-    toast.error(result.message || 'Sync failed');
   };
 
   const handleUploadUnsynced = async () => {
     if (!verification || verification.unsynced.length === 0) return;
 
     setSyncing(true);
-    const result = await pushUnsyncedToSupabase(verification.unsynced);
-    setVerification(result.verification ?? null);
-    setSyncing(false);
+    try {
+      const result = await pushUnsyncedToSupabase(verification.unsynced);
+      setVerification(result.verification ?? null);
 
-    if (result.emergencyBackupSaved) {
-      toast.warning('Emergency backup downloaded because upload failed');
+      if (result.emergencyBackupSaved) {
+        toast.warning('Emergency backup downloaded because upload failed');
+      }
+
+      if (result.ok) {
+        toast.success(result.message || 'Unsynced records uploaded');
+        return;
+      }
+
+      toast.error(result.message || 'Upload failed');
+    } catch (error) {
+      toast.error(verificationErrorMessage(error));
+    } finally {
+      setSyncing(false);
     }
-
-    if (result.ok) {
-      toast.success(result.message || 'Unsynced records uploaded');
-      return;
-    }
-
-    toast.error(result.message || 'Upload failed');
   };
 
   const handleDownloadFromCloud = async () => {
     setSyncing(true);
-    const result = await pullFromCloud(false);
-    setSyncing(false);
+    try {
+      const result = await pullFromCloud(false);
 
-    if (result.ok) {
-      toast.success(result.message || 'Downloaded shop data from cloud');
-      await runVerify();
-      return;
+      if (result.ok) {
+        toast.success(result.message || 'Downloaded shop data from cloud');
+        await runVerify({ showLoading: false, showToasts: false });
+        return;
+      }
+
+      toast.error(result.message || 'Could not download from cloud');
+    } catch (error) {
+      toast.error(verificationErrorMessage(error));
+    } finally {
+      setSyncing(false);
     }
-
-    toast.error(result.message || 'Could not download from cloud');
   };
 
-  const busy = loading || syncing || status === 'syncing';
+  const panelSyncing = syncing || status === 'syncing';
+  const busy = loading || panelSyncing;
   const hasVerificationError = Boolean(verification?.error);
   const unsynced = verification?.unsynced ?? [];
   const pendingDeletions = getPendingCloudDeletionCount();
@@ -131,7 +207,12 @@ export default function SyncHealthPanel() {
     <div className="space-y-3 rounded-lg border p-3">
       <div className="flex items-center justify-between gap-2">
         <p className="font-medium text-sm">Sync status</p>
-        {allSynced ? (
+        {loading && !verification ? (
+          <Badge variant="secondary" className="text-xs gap-1">
+            <Loader2 className="w-3 h-3 animate-spin" />
+            Checking…
+          </Badge>
+        ) : allSynced ? (
           <Badge className="bg-success text-success-foreground text-xs gap-1">
             <CheckCircle2 className="w-3 h-3" />
             All synced
@@ -140,7 +221,7 @@ export default function SyncHealthPanel() {
           <Badge variant="destructive" className="text-xs gap-1">
             <AlertTriangle className="w-3 h-3" />
             {hasVerificationError
-              ? 'Account mismatch'
+              ? 'Sync error'
               : needsCloudDownload
                 ? 'Download needed'
                 : needsDeletionUpload
@@ -149,7 +230,9 @@ export default function SyncHealthPanel() {
                     ? `${unsynced.length} not in cloud`
                     : verification?.cloudHasMoreRecords
                       ? 'Cloud has more data'
-                      : 'Counts differ'}
+                      : verification
+                        ? 'Counts differ'
+                        : 'Not checked yet'}
           </Badge>
         )}
       </div>
@@ -245,7 +328,7 @@ export default function SyncHealthPanel() {
           size="sm"
           className="w-full"
           disabled={busy || !isOnline}
-          onClick={runVerify}
+          onClick={() => runVerify()}
         >
           {loading ? (
             <>
@@ -267,7 +350,7 @@ export default function SyncHealthPanel() {
             disabled={busy || !isOnline}
             onClick={handleDownloadFromCloud}
           >
-            {syncing ? (
+            {panelSyncing ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                 Downloading…
@@ -281,37 +364,37 @@ export default function SyncHealthPanel() {
           </Button>
         ) : needsDeletionUpload || unsynced.length > 0 ? (
           unsynced.length > 0 ? (
-          <Button
-            size="sm"
-            className="w-full"
-            disabled={busy || !isOnline}
-            onClick={handleUploadUnsynced}
-          >
-            {syncing ? (
-              <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Uploading unsynced…
-              </>
-            ) : (
-              `Upload ${unsynced.length} unsynced record(s)`
-            )}
-          </Button>
+            <Button
+              size="sm"
+              className="w-full"
+              disabled={busy || !isOnline}
+              onClick={handleUploadUnsynced}
+            >
+              {panelSyncing ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Uploading unsynced…
+                </>
+              ) : (
+                `Upload ${unsynced.length} unsynced record(s)`
+              )}
+            </Button>
           ) : (
-          <Button
-            size="sm"
-            className="w-full"
-            disabled={busy || !isOnline || isLocalTenantDataEmpty()}
-            onClick={handleUploadAll}
-          >
-            {syncing ? (
-              <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Uploading…
-              </>
-            ) : (
-              'Upload to sync deletions'
-            )}
-          </Button>
+            <Button
+              size="sm"
+              className="w-full"
+              disabled={busy || !isOnline || isLocalTenantDataEmpty()}
+              onClick={handleUploadAll}
+            >
+              {panelSyncing ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Uploading deletions…
+                </>
+              ) : (
+                'Upload to sync deletions'
+              )}
+            </Button>
           )
         ) : (
           <Button
@@ -321,7 +404,7 @@ export default function SyncHealthPanel() {
             disabled={busy || !isOnline || isLocalTenantDataEmpty()}
             onClick={handleUploadAll}
           >
-            {syncing ? (
+            {panelSyncing ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                 Uploading…

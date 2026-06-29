@@ -45,6 +45,29 @@ export function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Reject if a promise does not settle within the given time. */
+export async function withTimeout<T>(
+  operation: Promise<T>,
+  ms: number,
+  message = 'Operation timed out',
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = window.setTimeout(() => {
+      reject(new Error(message));
+    }, ms);
+  });
+
+  try {
+    return await Promise.race([operation, timeout]);
+  } finally {
+    if (timeoutId !== undefined) {
+      window.clearTimeout(timeoutId);
+    }
+  }
+}
+
 /** Wait until the browser reports online and a lightweight probe succeeds. */
 export async function waitForNetworkReady(options?: {
   maxAttempts?: number;

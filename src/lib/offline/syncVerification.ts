@@ -14,7 +14,7 @@ import {
   supplierPaymentStorage,
   supplierStorage,
 } from '@/lib/storage';
-import { withNetworkRetry } from '@/lib/offline/network';
+import { withTimeout } from '@/lib/offline/network';
 import {
   SYNC_TABLE_LABELS,
   SYNC_TABLE_ORDER,
@@ -125,7 +125,11 @@ export async function verifyLocalVsCloud(): Promise<SyncVerificationResult> {
 
   for (const table of SYNC_TABLE_ORDER) {
     const localRecords = getLocalRecords(table);
-    const cloudIds = await fetchCloudIds(table, tenantId);
+    const cloudIds = await withTimeout(
+      fetchCloudIds(table, tenantId),
+      20000,
+      `Timed out reading ${table} from cloud`,
+    );
 
     counts.push({
       table,

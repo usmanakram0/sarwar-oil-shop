@@ -39,6 +39,7 @@ import {
   isRetryableNetworkError,
   waitForNetworkReady,
   withNetworkRetry,
+  withTimeout,
 } from '@/lib/offline/network';
 import {
   applyPendingCloudDeletions,
@@ -51,6 +52,7 @@ import {
   verifyLocalVsCloud,
 } from '@/lib/offline/syncVerification';
 import {
+  SYNC_TABLE_LABELS,
   SYNC_TABLE_ORDER,
   type SyncPushResult,
   type SyncTableName,
@@ -487,7 +489,7 @@ async function runPushWithVerification(options: {
   }
 
   if (syncInFlight) {
-    return { ok: false, message: 'Sync already in progress' };
+    return { ok: false, message: 'Sync already in progress — wait a moment and try again' };
   }
 
   syncInFlight = true;
@@ -497,7 +499,11 @@ async function runPushWithVerification(options: {
   const tenantId = session.tenantId;
 
   try {
-    await pushTables(tenantId, options.tables, options.idsByTable);
+    await withTimeout(
+      pushTables(tenantId, options.tables, options.idsByTable),
+      180000,
+      'Cloud upload timed out — check your connection and try again',
+    );
 
     const verification = await verifyLocalVsCloud();
 
@@ -627,26 +633,99 @@ export async function pushUnsyncedToSupabase(
   });
 }
 
+function emptyVerificationResult(
+  verifiedAt: string,
+  error?: string,
+): SyncVerificationResult {
+  const counts: SyncVerificationResult['counts'] = [
+    {
+      table: 'products',
+      label: SYNC_TABLE_LABELS.products,
+      local: productStorage.getAll().length,
+      cloud: 0,
+    },
+    {
+      table: 'customers',
+      label: SYNC_TABLE_LABELS.customers,
+      local: customerStorage.getAll().length,
+      cloud: 0,
+    },
+    {
+      table: 'suppliers',
+      label: SYNC_TABLE_LABELS.suppliers,
+      local: supplierStorage.getAll().length,
+      cloud: 0,
+    },
+    {
+      table: 'invoices',
+      label: SYNC_TABLE_LABELS.invoices,
+      local: invoiceStorage.getAll().length,
+      cloud: 0,
+    },
+    {
+      table: 'payments',
+      label: SYNC_TABLE_LABELS.payments,
+      local: paymentStorage.getAll().length,
+      cloud: 0,
+    },
+    {
+      table: 'stock_purchases',
+      label: SYNC_TABLE_LABELS.stock_purchases,
+      local: stockPurchaseStorage.getAll().length,
+      cloud: 0,
+    },
+    {
+      table: 'supplier_payments',
+      label: SYNC_TABLE_LABELS.supplier_payments,
+      local: supplierPaymentStorage.getAll().length,
+      cloud: 0,
+    },
+  ];
+
+  return {
+    ok: false,
+    uploadComplete: false,
+    countsMatch: false,
+    cloudHasMoreRecords: false,
+    verifiedAt,
+    counts,
+    unsynced: [],
+    error,
+  };
+}
+
 export async function verifySyncWithCloud(): Promise<SyncVerificationResult> {
   const verifiedAt = new Date().toISOString();
-  const auth = await ensureCloudAuthSession();
-  if (!auth.ok) {
-    const localOnly = await verifyLocalVsCloud().catch(() => null);
-    if (localOnly) {
-      return {
-        ...localOnly,
-        ok: false,
-        verifiedAt,
-      };
+
+  try {
+    const auth = await withTimeout(
+      ensureCloudAuthSession(),
+      30000,
+      'Cloud sign-in check timed out — try again',
+    );
+    if (!auth.ok) {
+      const localOnly = await verifyLocalVsCloud().catch(() => null);
+      if (localOnly) {
+        return {
+          ...localOnly,
+          ok: false,
+          verifiedAt,
+          error: auth.message,
+        };
+      }
+      return emptyVerificationResult(verifiedAt, auth.message);
     }
-    return {
-      ok: false,
-      verifiedAt,
-      counts: [],
-      unsynced: [],
-    };
+
+    return await withTimeout(
+      verifyLocalVsCloud(),
+      120000,
+      'Cloud verification timed out — check your connection and try again',
+    );
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : 'Cloud verification failed';
+    return emptyVerificationResult(verifiedAt, message);
   }
-  return verifyLocalVsCloud();
 }
 
 export async function runSyncIfNeeded(): Promise<void> {

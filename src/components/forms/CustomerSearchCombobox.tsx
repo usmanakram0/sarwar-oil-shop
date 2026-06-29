@@ -22,18 +22,28 @@ interface CustomerSearchComboboxProps {
   customers: Customer[];
   value: string;
   onValueChange: (customerId: string) => void;
+  /** When false, hides the walking customer option (e.g. ledger create). */
+  showWalkingCustomer?: boolean;
+  placeholder?: string;
+  emptyMessage?: string;
 }
 
 export default function CustomerSearchCombobox({
   customers,
   value,
   onValueChange,
+  showWalkingCustomer = true,
+  placeholder = "Select customer",
+  emptyMessage = "No customer found.",
 }: CustomerSearchComboboxProps) {
   const [open, setOpen] = useState(false);
   const selectedCustomer = customers.find((customer) => customer.id === value);
-  const displayLabel = selectedCustomer
-    ? selectedCustomer.name
-    : WALKING_CUSTOMER_NAME;
+  let displayLabel = placeholder;
+  if (selectedCustomer) {
+    displayLabel = selectedCustomer.name;
+  } else if (showWalkingCustomer && value === "") {
+    displayLabel = WALKING_CUSTOMER_NAME;
+  }
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -55,22 +65,24 @@ export default function CustomerSearchCombobox({
         <Command>
           <CommandInput placeholder="Search by name or phone..." />
           <CommandList>
-            <CommandEmpty>No customer found.</CommandEmpty>
+            <CommandEmpty>{emptyMessage}</CommandEmpty>
             <CommandGroup>
-              <CommandItem
-                value={WALKING_CUSTOMER_NAME}
-                onSelect={() => {
-                  onValueChange("");
-                  setOpen(false);
-                }}>
-                <Check
-                  className={cn(
-                    "mr-2 h-4 w-4",
-                    value === "" ? "opacity-100" : "opacity-0",
-                  )}
-                />
-                {WALKING_CUSTOMER_NAME}
-              </CommandItem>
+              {showWalkingCustomer && (
+                <CommandItem
+                  value={WALKING_CUSTOMER_NAME}
+                  onSelect={() => {
+                    onValueChange("");
+                    setOpen(false);
+                  }}>
+                  <Check
+                    className={cn(
+                      "mr-2 h-4 w-4",
+                      value === "" ? "opacity-100" : "opacity-0",
+                    )}
+                  />
+                  {WALKING_CUSTOMER_NAME}
+                </CommandItem>
+              )}
               {customers.map((customer) => (
                 <CommandItem
                   key={customer.id}

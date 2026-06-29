@@ -2,13 +2,13 @@ import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, CheckCircle2, CloudDownload, Loader2, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import {
-  getLastVerifiedAt,
+import { getLastVerifiedAt,
   pushLocalDataToSupabase,
   pushUnsyncedToSupabase,
   verifySyncWithCloud,
   type SyncVerificationResult,
 } from '@/lib/offline/syncEngine';
+import { getPendingCloudDeletionCount } from '@/lib/offline/syncDeletions';
 import { useSync } from '@/contexts/SyncContext';
 import { getSession } from '@/lib/auth';
 import { isLocalTenantDataEmpty } from '@/lib/storage';
@@ -37,8 +37,10 @@ export default function SyncHealthPanel() {
 
     if (result.ok) {
       toast.success('Device and cloud are fully in sync');
-    } else if (result.cloudHasMoreRecords && result.uploadComplete) {
+    } else if (result.cloudHasMoreRecords && isLocalTenantDataEmpty()) {
       toast.info('Cloud has your shop data — download it to this device');
+    } else if (result.cloudHasMoreRecords) {
+      toast.info('Cloud has extra records — upload to sync deletions from this device');
     } else if (result.unsynced.length > 0) {
       toast.error(
         `${result.unsynced.length} record(s) not found in cloud — see list below`
@@ -110,10 +112,19 @@ export default function SyncHealthPanel() {
   const busy = loading || syncing || status === 'syncing';
   const hasVerificationError = Boolean(verification?.error);
   const unsynced = verification?.unsynced ?? [];
+  const pendingDeletions = getPendingCloudDeletionCount();
+  const hasCloudExtraRows =
+    verification?.counts.some((row) => row.cloud > row.local) ?? false;
   const needsCloudDownload =
     verification != null &&
     verification.uploadComplete &&
-    verification.cloudHasMoreRecords;
+    verification.cloudHasMoreRecords &&
+    isLocalTenantDataEmpty();
+  const needsDeletionUpload =
+    verification != null &&
+    verification.cloudHasMoreRecords &&
+    !isLocalTenantDataEmpty() &&
+    (pendingDeletions > 0 || hasCloudExtraRows);
   const allSynced = verification?.ok === true && !hasVerificationError;
 
   return (
@@ -132,9 +143,13 @@ export default function SyncHealthPanel() {
               ? 'Account mismatch'
               : needsCloudDownload
                 ? 'Download needed'
-                : unsynced.length > 0
-                  ? `${unsynced.length} not in cloud`
-                  : 'Counts differ'}
+                : needsDeletionUpload
+                  ? 'Upload to sync deletions'
+                  : unsynced.length > 0
+                    ? `${unsynced.length} not in cloud`
+                    : verification?.cloudHasMoreRecords
+                      ? 'Cloud has more data'
+                      : 'Counts differ'}
           </Badge>
         )}
       </div>
@@ -150,6 +165,25 @@ export default function SyncHealthPanel() {
           to this device.
         </p>
       )}
+
+      {needsDeletionUpload && !needsCloudDownload && (
+        <p className="text-xs text-amber-700 dark:text-amber-300">
+          {pendingDeletions > 0
+            ? `${pendingDeletions} deleted record(s) on this device still need to be removed from cloud. Upload to sync deletions.`
+            : 'Cloud has extra records that were deleted on this device. Upload to remove them from cloud.'}
+        </p>
+      )}
+
+      {verification?.cloudHasMoreRecords &&
+        verification.uploadComplete &&
+        pendingDeletions === 0 &&
+        !isLocalTenantDataEmpty() &&
+        !needsCloudDownload && (
+          <p className="text-xs text-muted-foreground">
+            Cloud has more records than this device — another device may have added
+            data. Download only if you want to replace this device with cloud data.
+          </p>
+        )}
 
       {lastVerifiedAt && (
         <p className="text-xs text-muted-foreground">
@@ -245,7 +279,8 @@ export default function SyncHealthPanel() {
               </>
             )}
           </Button>
-        ) : unsynced.length > 0 ? (
+        ) : needsDeletionUpload || unsynced.length > 0 ? (
+          unsynced.length > 0 ? (
           <Button
             size="sm"
             className="w-full"
@@ -261,6 +296,23 @@ export default function SyncHealthPanel() {
               `Upload ${unsynced.length} unsynced record(s)`
             )}
           </Button>
+          ) : (
+          <Button
+            size="sm"
+            className="w-full"
+            disabled={busy || !isOnline || isLocalTenantDataEmpty()}
+            onClick={handleUploadAll}
+          >
+            {syncing ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                Uploading…
+              </>
+            ) : (
+              'Upload to sync deletions'
+            )}
+          </Button>
+          )
         ) : (
           <Button
             variant="secondary"

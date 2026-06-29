@@ -80,6 +80,7 @@ import {
 import { usePagination } from "@/hooks/usePagination";
 import ListPagination from "@/components/ui/ListPagination";
 import ConfirmDeleteDialog from "@/components/ConfirmDeleteDialog";
+import CustomerSearchCombobox from "@/components/forms/CustomerSearchCombobox";
 import { safeArray, safeString } from "@/lib/query/safe";
 import { format, parseISO, startOfDay, endOfDay } from "date-fns";
 import { toast } from "sonner";
@@ -1413,21 +1414,14 @@ export default function Ledger() {
             </p>
             <div>
               <FormLabel required>Customer</FormLabel>
-              <Select
+              <CustomerSearchCombobox
+                customers={customersWithoutLedger}
                 value={createLedgerCustomerId}
-                onValueChange={setCreateLedgerCustomerId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select customer" />
-                </SelectTrigger>
-                <SelectContent>
-                  {customersWithoutLedger.map((customer) => (
-                    <SelectItem key={customer.id} value={customer.id}>
-                      {customer.name}
-                      {customer.phone ? ` (${customer.phone})` : ""}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                onValueChange={setCreateLedgerCustomerId}
+                showWalkingCustomer={false}
+                placeholder="Search customer by name or phone..."
+                emptyMessage="No customer without a ledger found."
+              />
               {customers.length === 0 && (
                 <p className="text-xs text-muted-foreground mt-2">
                   No customers yet.{" "}

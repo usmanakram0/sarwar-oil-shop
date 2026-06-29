@@ -4,6 +4,7 @@ import {
   assertTenantIsolation,
   getLocalTenantIdForSync,
 } from '@/lib/offline/cloudTenant';
+import { fetchCloudIds } from '@/lib/offline/syncCloudIds';
 import {
   customerStorage,
   invoiceStorage,
@@ -27,29 +28,6 @@ const LAST_VERIFIED_KEY_PREFIX = 'oilshop_last_verified_at_';
 
 function lastVerifiedStorageKey(tenantId: string): string {
   return `${LAST_VERIFIED_KEY_PREFIX}${tenantId}`;
-}
-
-async function fetchCloudIds(
-  table: SyncTableName,
-  tenantId: string,
-): Promise<Set<string>> {
-  if (!supabase) return new Set();
-
-  const result = await withNetworkRetry(async () => {
-    const response = await supabase!
-      .from(table)
-      .select('id')
-      .eq('tenant_id', tenantId);
-    if (response.error) throw new Error(`${table}: ${response.error.message}`);
-    return response;
-  });
-
-  const ids = new Set<string>();
-  for (const row of result.data ?? []) {
-    const id = (row as { id?: string }).id;
-    if (id) ids.add(id);
-  }
-  return ids;
 }
 
 function getLocalRecords(table: SyncTableName): Array<{ id: string; label: string }> {

@@ -2,6 +2,10 @@
 import { getCurrentTenantId } from '@/lib/auth';
 import { clearTenantDataDirty, markTenantDataDirty } from '@/lib/offline/syncMeta';
 import {
+  clearAllPendingCloudDeletions,
+  recordPendingCloudDeletion,
+} from '@/lib/offline/syncDeletions';
+import {
   flushTenantAutosave,
   scheduleTenantAutosave,
   type TenantAutosavePayload,
@@ -506,6 +510,7 @@ export function replaceTenantDataFromCloud(snapshot: TenantCloudSnapshot): void 
   scheduleTenantAutosave(buildTenantAutosaveSnapshot);
   flushTenantAutosave(buildTenantAutosaveSnapshot);
   clearTenantDataDirty();
+  clearAllPendingCloudDeletions();
   clearStorageCache();
 }
 
@@ -623,6 +628,7 @@ export const productStorage = {
     const products = getAll<Product>('products');
     const filtered = products.filter(p => p.id !== id);
     if (filtered.length === products.length) return false;
+    recordPendingCloudDeletion('products', id);
     setAll('products', filtered);
     return true;
   },
@@ -671,6 +677,7 @@ export const customerStorage = {
     const customers = getAll<Customer>('customers');
     const filtered = customers.filter(c => c.id !== id);
     if (filtered.length === customers.length) return false;
+    recordPendingCloudDeletion('customers', id);
     setAll('customers', filtered);
     return true;
   },
@@ -966,9 +973,12 @@ export const paymentStorage = {
   },
   removeByInvoiceId: (invoiceId: string): void => {
     const payments = getAll<Payment>('payments');
-    const filtered = payments.filter(p => p.invoiceId !== invoiceId);
-    if (filtered.length === payments.length) return;
-    setAll('payments', filtered);
+    const toRemove = payments.filter(p => p.invoiceId === invoiceId);
+    if (toRemove.length === 0) return;
+    for (const payment of toRemove) {
+      recordPendingCloudDeletion('payments', payment.id);
+    }
+    setAll('payments', payments.filter(p => p.invoiceId !== invoiceId));
   },
   updateManualEntry: (
     id: string,
@@ -1028,6 +1038,7 @@ export const paymentStorage = {
       reverseManualPaymentAllocation(existing.customerId, existing.amount);
     }
 
+    recordPendingCloudDeletion('payments', id);
     payments.splice(idx, 1);
     setAll('payments', payments);
     customerLedgerStorage.touch(existing.customerId);
@@ -1203,6 +1214,7 @@ export const supplierStorage = {
     const suppliers = getAll<Supplier>('suppliers');
     const filtered = suppliers.filter(s => s.id !== id);
     if (filtered.length === suppliers.length) return false;
+    recordPendingCloudDeletion('suppliers', id);
     setAll('suppliers', filtered);
     return true;
   },
@@ -1308,6 +1320,7 @@ export const stockPurchaseStorage = {
         'out',
       );
     }
+    recordPendingCloudDeletion('stock_purchases', id);
     setAll('stockPurchases', purchases.filter(p => p.id !== id));
     return true;
   },

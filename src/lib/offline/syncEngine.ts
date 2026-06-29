@@ -40,7 +40,10 @@ import {
   waitForNetworkReady,
   withNetworkRetry,
 } from '@/lib/offline/network';
-import { checkCloudSchemaReady } from '@/lib/offline/syncSchemaCheck';
+import {
+  applyPendingCloudDeletions,
+  reconcileCloudDeletionsWithLocal,
+} from '@/lib/offline/syncDeletions';
 import {
   groupUnsyncedByTable,
   verifyLocalVsCloud,
@@ -247,10 +250,20 @@ async function pushTables(
   tables: SyncTableName[],
   idsByTable?: Partial<Record<SyncTableName, string[]>>
 ): Promise<void> {
+  const isFullPush = !idsByTable || Object.keys(idsByTable).length === 0;
+
+  await applyPendingCloudDeletions(tenantId, [...SYNC_TABLE_ORDER]);
+
   for (const table of tables) {
     const idList = idsByTable?.[table];
     const idSet = idList ? new Set(idList) : undefined;
-    await pushTable(table, mapTableRows(table, tenantId, idSet));
+    const rows = mapTableRows(table, tenantId, idSet);
+    await pushTable(table, rows);
+
+    if (isFullPush) {
+      const localIds = new Set(rows.map((row) => String(row.id)));
+      await reconcileCloudDeletionsWithLocal(tenantId, table, localIds);
+    }
   }
 
   const shouldPushSettings =
@@ -493,7 +506,7 @@ async function runPushWithVerification(options: {
     if (verification.cloudHasMoreRecords) {
       clearTenantDataDirty();
       const message =
-        'All device records are in cloud. Cloud has more data on another device — use Download from cloud in Settings.';
+        'All device records are in cloud. Cloud has more data on another device — use Download from cloud in Settings if you need that data here.';
       emitSyncStatus({ state: 'idle', message });
       return {
         ok: true,

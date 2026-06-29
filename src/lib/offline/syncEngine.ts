@@ -42,8 +42,10 @@ import {
 } from '@/lib/offline/network';
 import {
   applyPendingCloudDeletions,
+  getPendingCloudDeletions,
   reconcileCloudDeletionsWithLocal,
 } from '@/lib/offline/syncDeletions';
+import { flushPendingWrites } from '@/lib/persistence/shopStorage';
 import {
   groupUnsyncedByTable,
   verifyLocalVsCloud,
@@ -251,19 +253,28 @@ async function pushTables(
   idsByTable?: Partial<Record<SyncTableName, string[]>>
 ): Promise<void> {
   const isFullPush = !idsByTable || Object.keys(idsByTable).length === 0;
+  const pendingBeforeSync = getPendingCloudDeletions();
 
+  await flushPendingWrites();
   await applyPendingCloudDeletions(tenantId, [...SYNC_TABLE_ORDER]);
 
   for (const table of tables) {
     const idList = idsByTable?.[table];
     const idSet = idList ? new Set(idList) : undefined;
-    const rows = mapTableRows(table, tenantId, idSet);
-    await pushTable(table, rows);
+    await pushTable(table, mapTableRows(table, tenantId, idSet));
+  }
 
-    if (isFullPush) {
-      const localIds = new Set(rows.map((row) => String(row.id)));
-      await reconcileCloudDeletionsWithLocal(tenantId, table, localIds);
-    }
+  const tablesToReconcile = isFullPush
+    ? [...SYNC_TABLE_ORDER]
+    : SYNC_TABLE_ORDER.filter(
+        (table) => (pendingBeforeSync[table]?.length ?? 0) > 0,
+      );
+
+  for (const table of tablesToReconcile) {
+    const localIds = new Set(
+      mapTableRows(table, tenantId).map((row) => String(row.id)),
+    );
+    await reconcileCloudDeletionsWithLocal(tenantId, table, localIds);
   }
 
   const shouldPushSettings =
@@ -504,12 +515,30 @@ async function runPushWithVerification(options: {
     }
 
     if (verification.cloudHasMoreRecords) {
-      clearTenantDataDirty();
+      if (isLocalTenantDataEmpty()) {
+        clearTenantDataDirty();
+        const message =
+          'Your shop data is in the cloud — download it to this device from Settings.';
+        emitSyncStatus({ state: 'idle', message });
+        return {
+          ok: true,
+          message,
+          verification,
+        };
+      }
+
+      const extraCloudRecords = verification.counts.reduce(
+        (sum, row) => sum + Math.max(0, row.cloud - row.local),
+        0,
+      );
       const message =
-        'All device records are in cloud. Cloud has more data on another device — use Download from cloud in Settings if you need that data here.';
-      emitSyncStatus({ state: 'idle', message });
+        extraCloudRecords > 0
+          ? `Cloud still has ${extraCloudRecords} record(s) deleted on this device. Open Settings → Upload to sync deletions.`
+          : 'Cloud has more data than this device. Open Settings → Sync status.';
+      markTenantDataDirty();
+      emitSyncStatus({ state: 'error', message });
       return {
-        ok: true,
+        ok: false,
         message,
         verification,
       };

@@ -4,7 +4,10 @@ import { isSupabaseConfigured, supabase } from '@/lib/supabase/client';
 import { withNetworkRetry } from '@/lib/offline/network';
 import { markTenantDataDirty } from '@/lib/offline/syncMeta';
 import type { SyncTableName } from '@/lib/offline/syncTypes';
-import { fetchCloudIds } from '@/lib/offline/syncCloudIds';
+import {
+  fetchCloudIds,
+  fetchCloudIdsByIds,
+} from '@/lib/offline/syncCloudIds';
 
 const CHUNK = 80;
 
@@ -74,24 +77,45 @@ function removePendingIds(table: SyncTableName, deletedIds: string[]): void {
   writePendingDeletions(pending);
 }
 
-export async function deleteCloudRows(
+async function assertCloudRowsDeleted(
   table: SyncTableName,
   tenantId: string,
   ids: string[],
 ): Promise<void> {
-  if (!isSupabaseConfigured || !supabase || ids.length === 0) return;
+  if (ids.length === 0) return;
 
-  for (let index = 0; index < ids.length; index += CHUNK) {
-    const part = ids.slice(index, index + CHUNK);
+  const stillPresent = await fetchCloudIdsByIds(table, tenantId, ids);
+  if (stillPresent.size === 0) return;
+
+  throw new Error(
+    `${table}: ${stillPresent.size} deleted record(s) still exist in cloud — upload could not remove them`,
+  );
+}
+
+export async function deleteCloudRows(
+  table: SyncTableName,
+  tenantId: string,
+  ids: string[],
+): Promise<string[]> {
+  if (!isSupabaseConfigured || !supabase || ids.length === 0) return [];
+
+  const uniqueIds = [...new Set(ids)];
+
+  for (let index = 0; index < uniqueIds.length; index += CHUNK) {
+    const part = uniqueIds.slice(index, index + CHUNK);
     await withNetworkRetry(async () => {
       const { error } = await supabase!
         .from(table)
         .delete()
         .eq('tenant_id', tenantId)
-        .in('id', part);
+        .in('id', part)
+        .select('id');
       if (error) throw new Error(`${table}: ${error.message}`);
     });
   }
+
+  await assertCloudRowsDeleted(table, tenantId, uniqueIds);
+  return uniqueIds;
 }
 
 /** Delete queued tombstones from cloud. */
@@ -106,9 +130,9 @@ export async function applyPendingCloudDeletions(
     const ids = pending[table];
     if (!ids || ids.length === 0) continue;
 
-    await deleteCloudRows(table, tenantId, ids);
-    removePendingIds(table, ids);
-    deletedCount += ids.length;
+    const deletedIds = await deleteCloudRows(table, tenantId, ids);
+    removePendingIds(table, deletedIds);
+    deletedCount += deletedIds.length;
   }
 
   return deletedCount;

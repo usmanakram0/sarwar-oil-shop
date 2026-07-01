@@ -25,6 +25,7 @@ const InvoiceCreate = lazy(() => import("@/pages/InvoiceCreate"));
 const InvoiceEdit = lazy(() => import("@/pages/InvoiceEdit"));
 const InvoiceView = lazy(() => import("@/pages/InvoiceView"));
 const Ledger = lazy(() => import("@/pages/Ledger"));
+const SupplierLedger = lazy(() => import("@/pages/SupplierLedger"));
 const Suppliers = lazy(() => import("@/pages/Suppliers"));
 const StockIn = lazy(() => import("@/pages/StockIn"));
 const StockInCreate = lazy(() => import("@/pages/StockInCreate"));
@@ -61,6 +62,7 @@ const App = () => (
                   <Route path="/" element={<LazyPage><Dashboard /></LazyPage>} />
                   <Route path="/products" element={<LazyPage><Products /></LazyPage>} />
                   <Route path="/suppliers" element={<LazyPage><Suppliers /></LazyPage>} />
+                  <Route path="/supplier-ledger" element={<LazyPage><SupplierLedger /></LazyPage>} />
                   <Route path="/stock-in" element={<LazyPage><StockIn /></LazyPage>} />
                   <Route path="/stock-in/new" element={<LazyPage><StockInCreate /></LazyPage>} />
                   <Route path="/stock-in/:id" element={<LazyPage><StockInView /></LazyPage>} />

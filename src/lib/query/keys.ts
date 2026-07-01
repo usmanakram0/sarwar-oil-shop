@@ -17,6 +17,10 @@ export const queryKeys = {
   stockPurchases: ['shop', 'stockPurchases'] as const,
   stockPurchase: (id: string) => ['shop', 'stockPurchases', id] as const,
   supplierPayments: ['shop', 'supplierPayments'] as const,
+  supplierPaymentsBySupplier: (supplierId: string) =>
+    ['shop', 'supplierPayments', 'supplier', supplierId] as const,
+  supplierBalance: (supplierId: string) =>
+    ['shop', 'supplierLedger', 'balance', supplierId] as const,
   settings: ['shop', 'settings'] as const,
   dashboard: ['shop', 'dashboard'] as const,
 };

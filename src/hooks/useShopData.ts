@@ -8,6 +8,7 @@ import {
   settingsStorage,
   stockPurchaseStorage,
   supplierStorage,
+  supplierPaymentStorage,
   type Customer,
   type CustomerLedger,
   type Invoice,
@@ -16,6 +17,7 @@ import {
   type ShopSettings,
   type StockPurchase,
   type Supplier,
+  type SupplierPayment,
 } from '@/lib/storage';
 import { queryKeys } from '@/lib/query/keys';
 import { safeArray, safeQueryFn } from '@/lib/query/safe';
@@ -217,6 +219,62 @@ export function useStockPurchaseQuery(id: string | undefined) {
     queryKey: queryKeys.stockPurchase(id ?? ''),
     queryFn: safeQueryFn(() => (id ? stockPurchaseStorage.getById(id) : undefined), undefined),
     enabled: Boolean(id),
+    ...OFFLINE_QUERY_OPTIONS,
+  });
+}
+
+export function useSupplierPaymentsQuery() {
+  return useQuery({
+    queryKey: queryKeys.supplierPayments,
+    queryFn: safeQueryFn(() => supplierPaymentStorage.getAll(), [] as SupplierPayment[]),
+    placeholderData: [] as SupplierPayment[],
+    ...OFFLINE_QUERY_OPTIONS,
+  });
+}
+
+export function useSupplierPaymentsBySupplierQuery(supplierId: string) {
+  return useQuery({
+    queryKey: queryKeys.supplierPaymentsBySupplier(supplierId),
+    queryFn: safeQueryFn(() => {
+      if (!supplierId) return [] as SupplierPayment[];
+      return supplierPaymentStorage.getBySupplier(supplierId);
+    }, [] as SupplierPayment[]),
+    enabled: Boolean(supplierId),
+    placeholderData: [] as SupplierPayment[],
+    ...OFFLINE_QUERY_OPTIONS,
+  });
+}
+
+export function useSupplierBalanceQuery(supplierId: string) {
+  return useQuery({
+    queryKey: queryKeys.supplierBalance(supplierId),
+    queryFn: safeQueryFn(() => {
+      if (!supplierId) {
+        return { totalDebit: 0, totalCredit: 0, balance: 0 };
+      }
+      return supplierPaymentStorage.getSupplierBalance(supplierId);
+    }, { totalDebit: 0, totalCredit: 0, balance: 0 }),
+    enabled: Boolean(supplierId),
+    placeholderData: { totalDebit: 0, totalCredit: 0, balance: 0 },
+    ...OFFLINE_QUERY_OPTIONS,
+  });
+}
+
+export function useSupplierPurchasesQuery(supplierId: string) {
+  return useQuery({
+    queryKey: ['shop', 'stockPurchases', 'supplier', supplierId] as const,
+    queryFn: safeQueryFn(() => {
+      if (!supplierId) return [] as StockPurchase[];
+      return stockPurchaseStorage
+        .getAll()
+        .filter((purchase) => purchase.supplierId === supplierId)
+        .sort(
+          (a, b) =>
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+        );
+    }, [] as StockPurchase[]),
+    enabled: Boolean(supplierId),
+    placeholderData: [] as StockPurchase[],
     ...OFFLINE_QUERY_OPTIONS,
   });
 }

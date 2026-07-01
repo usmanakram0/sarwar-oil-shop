@@ -1,7 +1,8 @@
 import { useState, useMemo } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Plus, Search, Pencil, Trash2, Truck } from 'lucide-react';
+import { Plus, Search, Pencil, Trash2, Truck, BookOpen } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -116,9 +117,17 @@ export default function Suppliers() {
 
   return (
     <div className="space-y-4 pb-16 lg:pb-0 animate-fade-in">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <h1 className="text-2xl font-heading font-bold">Suppliers / Dealers</h1>
-        <Button size="sm" onClick={openAdd}><Plus className="w-4 h-4 mr-1" />Add Supplier</Button>
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" asChild>
+            <Link to="/supplier-ledger">
+              <BookOpen className="w-4 h-4 mr-1" />
+              Supplier Ledger
+            </Link>
+          </Button>
+          <Button size="sm" onClick={openAdd}><Plus className="w-4 h-4 mr-1" />Add Supplier</Button>
+        </div>
       </div>
 
       <div className="relative">
@@ -150,6 +159,16 @@ export default function Suppliers() {
                 </div>
                 {s.address && <p className="text-xs text-muted-foreground mb-1">{s.address}</p>}
                 <p className="text-xs text-muted-foreground mt-2">{getPurchaseCount(s.id)} purchase(s)</p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full mt-3"
+                  asChild>
+                  <Link to={`/supplier-ledger?supplierId=${s.id}`}>
+                    <BookOpen className="w-3.5 h-3.5 mr-1" />
+                    View Ledger
+                  </Link>
+                </Button>
               </CardContent>
             </Card>
           ))}

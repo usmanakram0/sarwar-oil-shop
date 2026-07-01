@@ -6,6 +6,7 @@ export type InvalidationScope =
   | 'settings'
   | 'dashboard'
   | 'ledger'
+  | 'supplierLedger'
   | 'all';
 
 const STORAGE_KEY_TO_SCOPE: Record<ShopStorageKey, InvalidationScope[]> = {
@@ -16,7 +17,7 @@ const STORAGE_KEY_TO_SCOPE: Record<ShopStorageKey, InvalidationScope[]> = {
   payments: ['payments', 'invoices', 'dashboard', 'ledger'],
   customerLedgers: ['customerLedgers', 'ledger'],
   stockPurchases: ['stockPurchases', 'products', 'supplierPayments', 'dashboard'],
-  supplierPayments: ['supplierPayments', 'stockPurchases', 'dashboard'],
+  supplierPayments: ['supplierPayments', 'stockPurchases', 'dashboard', 'supplierLedger'],
 };
 
 const SCOPE_TO_QUERY_KEYS: Record<InvalidationScope, readonly (readonly unknown[])[]> = {
@@ -28,6 +29,7 @@ const SCOPE_TO_QUERY_KEYS: Record<InvalidationScope, readonly (readonly unknown[
   customerLedgers: [queryKeys.customerLedgers, queryKeys.root],
   stockPurchases: [queryKeys.stockPurchases, queryKeys.dashboard],
   supplierPayments: [queryKeys.supplierPayments],
+  supplierLedger: [queryKeys.supplierPayments, queryKeys.suppliers, queryKeys.stockPurchases, queryKeys.root],
   settings: [queryKeys.settings],
   dashboard: [queryKeys.dashboard],
   ledger: [queryKeys.payments, queryKeys.invoices, queryKeys.customers, queryKeys.customerLedgers, queryKeys.root],
@@ -89,6 +91,25 @@ export function invalidateShopQueries(
             second === 'invoices' ||
             second === 'ledger' ||
             second === 'customerLedgers'
+          );
+        },
+      });
+    }
+
+    if (
+      scopes.some(s =>
+        ['supplierPayments', 'supplierLedger', 'suppliers', 'stockPurchases'].includes(s)
+      )
+    ) {
+      void queryClient.invalidateQueries({
+        predicate: (query) => {
+          const root = query.queryKey[0];
+          const second = query.queryKey[1];
+          if (root !== 'shop') return false;
+          return (
+            second === 'supplierPayments' ||
+            second === 'supplierLedger' ||
+            second === 'stockPurchases'
           );
         },
       });

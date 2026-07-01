@@ -265,6 +265,11 @@ export interface SupplierPayment {
   type: 'debit' | 'credit'; // debit = we owe supplier, credit = we paid
   note: string;
   createdAt: string;
+  receiptNumber?: string;
+}
+
+export function isManualSupplierLedgerEntry(payment: SupplierPayment): boolean {
+  return !payment.purchaseId;
 }
 
 export interface ShopSettings {
@@ -373,6 +378,17 @@ function generateLedgerReceiptNumber(orderDate?: string): string {
   const d = ref.getDate().toString().padStart(2, '0');
   const seq = (getAll<Payment>('payments').length + 1).toString().padStart(4, '0');
   return `RCP-${y}${m}${d}-${seq}`;
+}
+
+function generateSupplierReceiptNumber(): string {
+  const payments = getAll<SupplierPayment>('supplierPayments');
+  const maxSeq = payments.reduce((max, payment) => {
+    if (!payment.receiptNumber) return max;
+    const parsed = parseInt(payment.receiptNumber, 10);
+    if (Number.isNaN(parsed)) return max;
+    return Math.max(max, parsed);
+  }, 0);
+  return (maxSeq + 1).toString().padStart(2, '0');
 }
 
 function applyStockLines(
@@ -1351,6 +1367,8 @@ export const stockPurchaseStorage = {
 // Supplier payments (amount owed to / paid to dealers)
 export const supplierPaymentStorage = {
   getAll: (): SupplierPayment[] => getAll<SupplierPayment>('supplierPayments'),
+  getById: (id: string): SupplierPayment | undefined =>
+    getAll<SupplierPayment>('supplierPayments').find((payment) => payment.id === id),
   getBySupplier: (supplierId: string): SupplierPayment[] =>
     getAll<SupplierPayment>('supplierPayments').filter(p => p.supplierId === supplierId),
   add: (payment: Omit<SupplierPayment, 'id' | 'createdAt'>, createdAt?: string): SupplierPayment => {
@@ -1365,11 +1383,103 @@ export const supplierPaymentStorage = {
     setAll('supplierPayments', payments);
     return newPayment;
   },
+  updateManualEntry: (
+    id: string,
+    updates: {
+      amount?: number;
+      note?: string;
+      createdAt?: string;
+    },
+  ): SupplierPayment | undefined => {
+    const payments = getAll<SupplierPayment>('supplierPayments');
+    const idx = payments.findIndex((payment) => payment.id === id);
+    if (idx === -1) return undefined;
+
+    const existing = payments[idx];
+    if (!isManualSupplierLedgerEntry(existing)) return undefined;
+
+    const amount = updates.amount ?? existing.amount;
+    if (amount <= 0) {
+      throw new Error('Amount must be greater than zero');
+    }
+
+    const updated: SupplierPayment = {
+      ...existing,
+      amount,
+      note: updates.note?.trim() || existing.note,
+      createdAt: updates.createdAt ?? existing.createdAt,
+    };
+    payments[idx] = updated;
+    setAll('supplierPayments', payments);
+    return updated;
+  },
+  deleteManualEntry: (id: string): SupplierPayment | undefined => {
+    const payments = getAll<SupplierPayment>('supplierPayments');
+    const idx = payments.findIndex((payment) => payment.id === id);
+    if (idx === -1) return undefined;
+
+    const existing = payments[idx];
+    if (!isManualSupplierLedgerEntry(existing)) return undefined;
+
+    recordPendingCloudDeletion('supplier_payments', id);
+    payments.splice(idx, 1);
+    setAll('supplierPayments', payments);
+    return existing;
+  },
   getSupplierBalance: (supplierId: string): { totalDebit: number; totalCredit: number; balance: number } => {
     const payments = getAll<SupplierPayment>('supplierPayments').filter(p => p.supplierId === supplierId);
     const totalDebit = payments.filter(p => p.type === 'debit').reduce((s, p) => s + p.amount, 0);
     const totalCredit = payments.filter(p => p.type === 'credit').reduce((s, p) => s + p.amount, 0);
     return { totalDebit, totalCredit, balance: totalDebit - totalCredit };
+  },
+  addHistoricalLedgerEntry: (
+    supplierId: string,
+    supplierName: string,
+    amount: number,
+    type: 'debit' | 'credit',
+    note: string,
+    orderDate?: string,
+    options?: { receiptNumber?: string },
+  ): SupplierPayment => {
+    const timestamp = resolveOrderTimestamp(orderDate);
+    const defaultNote =
+      type === 'debit'
+        ? 'Old balance from previous records'
+        : 'Old payment from previous records';
+    return supplierPaymentStorage.add(
+      {
+        supplierId,
+        supplierName,
+        amount,
+        type,
+        note: note.trim() || defaultNote,
+        receiptNumber: options?.receiptNumber ?? generateSupplierReceiptNumber(),
+      },
+      timestamp,
+    );
+  },
+  addLedgerEntry: (
+    supplierId: string,
+    supplierName: string,
+    amount: number,
+    type: 'debit' | 'credit',
+    note: string,
+    options?: { orderDate?: string },
+  ): SupplierPayment => {
+    const timestamp = resolveOrderTimestamp(options?.orderDate);
+    const defaultNote =
+      type === 'debit' ? 'Pending amount owed' : note || 'Payment to supplier';
+    return supplierPaymentStorage.add(
+      {
+        supplierId,
+        supplierName,
+        amount,
+        type,
+        note: note.trim() || defaultNote,
+        receiptNumber: generateSupplierReceiptNumber(),
+      },
+      timestamp,
+    );
   },
 };
 

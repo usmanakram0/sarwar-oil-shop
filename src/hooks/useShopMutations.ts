@@ -8,6 +8,7 @@ import {
   settingsStorage,
   stockPurchaseStorage,
   supplierStorage,
+  supplierPaymentStorage,
   type Customer,
   type CustomerLedger,
   type Invoice,
@@ -16,6 +17,7 @@ import {
   type ShopSettings,
   type StockPurchase,
   type Supplier,
+  type SupplierPayment,
 } from '@/lib/storage';
 import {
   type HistoricalEntryOptions,
@@ -893,6 +895,190 @@ export function useCustomerLedgerMutations() {
   });
 
   return { create };
+}
+
+function appendSupplierPaymentToCaches(
+  payment: SupplierPayment,
+  supplierId: string,
+): void {
+  appendListItem(queryKeys.supplierPayments, payment);
+  appendListItem(queryKeys.supplierPaymentsBySupplier(supplierId), payment);
+  queryClient.setQueryData(
+    queryKeys.supplierBalance(supplierId),
+    (old: { totalDebit: number; totalCredit: number; balance: number } | undefined) => {
+      const prev = old ?? { totalDebit: 0, totalCredit: 0, balance: 0 };
+      if (payment.type === 'debit') {
+        return {
+          totalDebit: prev.totalDebit + payment.amount,
+          totalCredit: prev.totalCredit,
+          balance: prev.balance + payment.amount,
+        };
+      }
+      return {
+        totalDebit: prev.totalDebit,
+        totalCredit: prev.totalCredit + payment.amount,
+        balance: prev.balance - payment.amount,
+      };
+    },
+  );
+}
+
+function removeSupplierPaymentFromCaches(payment: SupplierPayment): void {
+  removeListItem<SupplierPayment>(queryKeys.supplierPayments, payment.id);
+  removeListItem<SupplierPayment>(
+    queryKeys.supplierPaymentsBySupplier(payment.supplierId),
+    payment.id,
+  );
+  queryClient.setQueryData(
+    queryKeys.supplierBalance(payment.supplierId),
+    supplierPaymentStorage.getSupplierBalance(payment.supplierId),
+  );
+}
+
+function replaceSupplierPaymentInCaches(updated: SupplierPayment): void {
+  updateListItem<SupplierPayment>(queryKeys.supplierPayments, updated.id, () => updated);
+  updateListItem<SupplierPayment>(
+    queryKeys.supplierPaymentsBySupplier(updated.supplierId),
+    updated.id,
+    () => updated,
+  );
+  queryClient.setQueryData(
+    queryKeys.supplierBalance(updated.supplierId),
+    supplierPaymentStorage.getSupplierBalance(updated.supplierId),
+  );
+}
+
+export function useSupplierPaymentMutations() {
+  const addLedgerEntry = useMutation({
+    mutationFn: ({
+      supplierId,
+      supplierName,
+      amount,
+      type,
+      note,
+      options,
+    }: {
+      supplierId: string;
+      supplierName: string;
+      amount: number;
+      type: 'debit' | 'credit';
+      note: string;
+      options?: { orderDate?: string };
+    }) =>
+      supplierPaymentStorage.addLedgerEntry(
+        supplierId,
+        supplierName,
+        amount,
+        type,
+        note,
+        options,
+      ),
+    onMutate: async ({
+      supplierId,
+      supplierName,
+      amount,
+      type,
+      note,
+      options,
+    }) => {
+      const ctx = await beginOptimisticUpdate([
+        queryKeys.supplierPayments,
+        queryKeys.supplierPaymentsBySupplier(supplierId),
+        queryKeys.supplierBalance(supplierId),
+        queryKeys.dashboard,
+      ]);
+      const defaultNote =
+        type === 'debit' ? 'Pending amount owed' : note || 'Payment to supplier';
+      appendSupplierPaymentToCaches(
+        {
+          id: tempId(),
+          supplierId,
+          supplierName,
+          amount,
+          type,
+          note: note.trim() || defaultNote,
+          createdAt: resolveOrderTimestamp(options?.orderDate),
+        },
+        supplierId,
+      );
+      return ctx;
+    },
+    onError: (_e, _v, ctx) => rollbackOptimisticUpdate(ctx),
+  });
+
+  const updateManualEntry = useMutation({
+    mutationFn: ({
+      id,
+      updates,
+    }: {
+      id: string;
+      updates: {
+        amount?: number;
+        note?: string;
+        createdAt?: string;
+      };
+    }) => {
+      const result = supplierPaymentStorage.updateManualEntry(id, updates);
+      if (!result) throw new Error('Entry not found or cannot be edited');
+      return result;
+    },
+    onMutate: async ({ id, updates }) => {
+      const existing = supplierPaymentStorage.getById(id);
+      if (!existing) return undefined;
+
+      const ctx = await beginOptimisticUpdate([
+        queryKeys.supplierPayments,
+        queryKeys.supplierPaymentsBySupplier(existing.supplierId),
+        queryKeys.supplierBalance(existing.supplierId),
+        queryKeys.dashboard,
+      ]);
+
+      const updated: SupplierPayment = {
+        ...existing,
+        amount: updates.amount ?? existing.amount,
+        note: updates.note?.trim() || existing.note,
+        createdAt: updates.createdAt ?? existing.createdAt,
+      };
+      replaceSupplierPaymentInCaches(updated);
+      return ctx;
+    },
+    onSuccess: (updated) => {
+      replaceSupplierPaymentInCaches(updated);
+      invalidateShopQueries(['supplierPayments', 'supplierLedger']);
+    },
+    onError: (_e, _v, ctx) => rollbackOptimisticUpdate(ctx),
+  });
+
+  const deleteManualEntry = useMutation({
+    mutationFn: (id: string) => {
+      const removed = supplierPaymentStorage.deleteManualEntry(id);
+      if (!removed) throw new Error('Entry not found or cannot be deleted');
+      return removed;
+    },
+    onMutate: async (id) => {
+      const existing = supplierPaymentStorage.getById(id);
+      if (!existing) return undefined;
+
+      const ctx = await beginOptimisticUpdate([
+        queryKeys.supplierPayments,
+        queryKeys.supplierPaymentsBySupplier(existing.supplierId),
+        queryKeys.supplierBalance(existing.supplierId),
+        queryKeys.dashboard,
+      ]);
+      removeSupplierPaymentFromCaches(existing);
+      return ctx;
+    },
+    onSuccess: () => {
+      invalidateShopQueries(['supplierPayments', 'supplierLedger']);
+    },
+    onError: (_e, _v, ctx) => rollbackOptimisticUpdate(ctx),
+  });
+
+  return {
+    addLedgerEntry,
+    updateManualEntry,
+    deleteManualEntry,
+  };
 }
 
 export function useSettingsMutation() {
